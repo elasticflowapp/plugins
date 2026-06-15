@@ -1,0 +1,12 @@
+{
+  "name": "ef-share",
+  "version": "0.5.0",
+  "description": "Share Claude Code sessions to ElasticFlow",
+  "mcpServers": {
+    "share": {
+      "type": "http",
+      "url": "${EF_SHARE_MCP_URL:-https://share.elasticflow.app/mcp}",
+      "note": "ElasticFlow Share MCP at share.elasticflow.app/mcp. OAuth via backend_auth — Claude Code prompts to authorize on first call. Override with EF_SHARE_MCP_URL (e.g. http://localhost:3005/api/mcp for local dev)."
+    }
+  }
+}

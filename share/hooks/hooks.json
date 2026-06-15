@@ -1,0 +1,21 @@
+{
+  "description": "Per-session resolution for /share: SessionStart exports EF_SHARE_TRANSCRIPT_PATH; UserPromptSubmit injects the current transcript on /share",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PLUGIN_ROOT\"/dist/src/hooks/session-start.js", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PLUGIN_ROOT\"/dist/src/hooks/user-prompt-submit.js", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "elasticflowapp",
+  "owner": {
+    "name": "Gena Koveshnikov"
+  },
+  "plugins": [
+    {
+      "name": "ef-share",
+      "source": "./share",
+      "description": "Share Claude Code sessions to ElasticFlow",
+      "version": "0.5.0"
+    }
+  ]
+}
