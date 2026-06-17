@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [0.7.0] - 2026-06-17
+
+### Added
+
+- **Frictionless publishing.** A `PreToolUse` hook auto-approves ef-share's own
+  session-transcript upload, so `/share` publishes without a permission prompt (or
+  an auto-mode classifier denial) — installing the plugin authorizes publishing. The
+  hook is scoped to the plugin's own ticketed upload to the Share endpoint (host
+  allowlist + `X-Upload-Ticket` + `session.jsonl`) and is shell-injection-guarded; it
+  stays neutral on every other command (ADR-0019).
+
 ## [0.6.0] - 2026-06-17
 
 ### Added
@@ -44,6 +55,7 @@ Initial public release of the `ef-share` Claude Code plugin.
 - Published to the `elasticflowapp/plugins` marketplace; install with
   `claude plugin install ef-share@elasticflowapp`.
 
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.7.0
 [0.6.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.6.0
 [0.5.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.5.0
