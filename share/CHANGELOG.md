@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [0.9.0] - 2026-06-18
+
+### Added
+- **Skill publisher provenance.** At publish, `commands/share.md` runs the `extract-skills` extractor over the session snapshot to capture each standalone skill's declared publisher metadata (`publisher` / `homepage` / `repository` / `author` / `license` / `version` from `SKILL.md` frontmatter, top-level or under `metadata:`) and sends it as the top-level `skills` argument to `share_publish`. The viewer resolves a standalone skill's Publisher from this (else the `unknown` fallback) instead of attributing it to `_unknown` (ADR-0021). Best-effort and non-gating — a missing/empty payload never fails the publish.
+- `publish-ef-share.sh` now ships `dist/bin/extract-skills.js` alongside the other publish-time extractors.
+
 ## [0.8.0] - 2026-06-18
 
 ### Changed
