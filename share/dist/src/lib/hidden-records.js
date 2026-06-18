@@ -179,7 +179,8 @@ function classify(jsonl) {
  * A span STARTS at a share-command user turn and extends through the contiguous
  * publishing flow, ENDING at the FIRST of:
  *   - the publish-completion record (assistant `share_status: done` / "Published:" /
- *     share URL, or a share-MCP tool_use) — INCLUSIVE; or
+ *     a share URL) — INCLUSIVE; a share-MCP tool_use is inside-span machinery, NOT a
+ *     terminator (the walk only ends on completion text/URL); or
  *   - the record just before the next genuine non-publishing human turn; or
  *   - EOF.
  * No "Published:" is required, so a failed/aborted publish is covered identically.

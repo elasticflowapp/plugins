@@ -8,7 +8,7 @@
       "name": "ef-share",
       "source": "./share",
       "description": "Share Claude Code sessions to ElasticFlow",
-      "version": "0.7.0"
+      "version": "0.8.0"
     }
   ]
 }

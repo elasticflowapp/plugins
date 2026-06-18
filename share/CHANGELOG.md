@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [0.8.0] - 2026-06-18
+
+### Changed
+
+- **Resilient enrichment in `/share`.** The publish flow now defers to the server
+  as the source of truth for enrichment and hardens its failure handling:
+  - Classified `automations` are passed **verbatim** — `/share` never rewrites the
+    `classified_by`, `signature`, `kind_id`, or `record_ref` fields the server
+    validates.
+  - An invalid or absent `automations` payload no longer fails the publish: the
+    server drops just that panel and reports it via `enrichmentWarnings`, which
+    `/share` now surfaces to the publisher instead of pointlessly retrying.
+  - On a failed publish, a retry preserves every field except the one the error
+    names, and **never** drops `hidden_records` or `redactions` — they are
+    correctness/privacy fields, not optional enrichments.
+- **Server-side publishing-record detection.** `hidden_records` is now also
+  detected server-side, so a session's own `/share` flow stays hidden even if the
+  client ever omits the array; `/share` still always sends it (ADR-0020).
+
 ## [0.7.0] - 2026-06-17
 
 ### Added
@@ -55,7 +74,8 @@ Initial public release of the `ef-share` Claude Code plugin.
 - Published to the `elasticflowapp/plugins` marketplace; install with
   `claude plugin install ef-share@elasticflowapp`.
 
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.8.0
 [0.7.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.7.0
 [0.6.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.6.0
 [0.5.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.5.0
