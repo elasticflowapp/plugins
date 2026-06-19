@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [0.10.0] - 2026-06-19
+
+### Added
+- **Plugin source provenance.** At publish, `commands/share.md` runs the new `extract-plugins` extractor to read the local Claude Code plugin registry (`installed_plugins.json` + `known_marketplaces.json` + each marketplace's `.claude-plugin/marketplace.json`) and resolves each installed plugin's real source URL and author name via `extractAllPluginProvenance`. The result is sent as the top-level `plugins` argument to `share_publish`. Best-effort and non-gating — a missing registry or empty payload never fails the publish.
+- `publish-ef-share.sh` now ships `dist/bin/extract-plugins.js` alongside the other publish-time extractors.
+
 ## [0.9.0] - 2026-06-18
 
 ### Added
@@ -80,7 +86,9 @@ Initial public release of the `ef-share` Claude Code plugin.
 - Published to the `elasticflowapp/plugins` marketplace; install with
   `claude plugin install ef-share@elasticflowapp`.
 
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.10.0
+[0.9.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.9.0
 [0.8.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.8.0
 [0.7.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.7.0
 [0.6.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.6.0

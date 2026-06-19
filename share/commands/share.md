@@ -34,7 +34,12 @@ Workflow:
    node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-skills.js" "$SNAP"
    ```
    (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-skills.ts" "$SNAP"`.) It prints `{ skill_contract_version, runtime, skills[] }`. Pass the entire object verbatim as the top-level `skills` argument to `share_publish`. If the script fails or `skills` is empty, omit `skills` entirely — this enrichment is best-effort and never causes a publish failure.
-8. Call `mcp__share__share_publish({ stagingId, visibility, title, summary, tags, tos, redactions, automations, chapters, language, hidden_records, skills })` (omit `language` if the skill did not return one; pass `hidden_records` as returned — `[]` is fine; omit `skills` entirely if step 7.5 produced no skills). Receive `{ jobId }`.
+7.6. Plugin source provenance: run the deterministic extractor to collect the installed-plugin registry and resolve each plugin's real source/origin:
+   ```
+   node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-plugins.js"
+   ```
+   (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-plugins.ts"`.) It prints `{ plugin_contract_version, runtime, plugins[] }`. Pass the entire object verbatim as the top-level `plugins` argument to `share_publish`. If the script fails or `plugins` is empty, omit `plugins` entirely — this enrichment is best-effort and never causes a publish failure.
+8. Call `mcp__share__share_publish({ stagingId, visibility, title, summary, tags, tos, redactions, automations, chapters, language, hidden_records, skills, plugins })` (omit `language` if the skill did not return one; pass `hidden_records` as returned — `[]` is fine; omit `skills` entirely if step 7.5 produced no skills; omit `plugins` entirely if step 7.6 produced no plugins). Receive `{ jobId }`.
 9. Poll `mcp__share__share_status({ jobId })` every 2s until `state === "done"` or `"failed"` (max 30). Report "Published: <url> — visibility: <chosen>" or the error.
    - If the terminal status carries `redactionWarnings`, the publish still succeeded but the server detected secret(s) that were NOT redacted. Show the user `redactionWarnings` (kind + preview + location) and `redactionRemediation`: re-run `/share` for this same session with those spans added to `redactions` — it scrubs the leak in place under the same URL.
    - If the terminal status carries `enrichmentWarnings`, the publish still succeeded but an optional panel (e.g. automations) was dropped server-side. Report which and why; do NOT retry for it (the rest of the session published fine).
