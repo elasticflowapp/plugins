@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+## [0.11.0] - 2026-06-19
+
+### Added
+- **Skill source provenance from the install lockfile.** At publish,
+  `extract-skills` reads the skill-manager lockfile (`skills-lock.json`) and
+  attributes each loose skill to its **source repository** — `publisher` = repo,
+  `author` = owner, `source` = the GitHub URL — instead of `_unknown` when the
+  `SKILL.md` frontmatter declares no author (ADR-0023). Resolution is scope-aware
+  (a skill is governed by the nearest lockfile above its on-disk location;
+  project and user scopes never cross), anchored on the transcript-recorded cwd,
+  and the lockfile wins over frontmatter. Best-effort and non-gating.
 
 ## [0.10.0] - 2026-06-19
 
@@ -86,7 +96,8 @@ Initial public release of the `ef-share` Claude Code plugin.
 - Published to the `elasticflowapp/plugins` marketplace; install with
   `claude plugin install ef-share@elasticflowapp`.
 
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.11.0
 [0.10.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.10.0
 [0.9.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.9.0
 [0.8.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.8.0
