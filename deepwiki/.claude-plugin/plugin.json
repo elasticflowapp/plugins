@@ -1,0 +1,10 @@
+{
+  "name": "deepwiki",
+  "version": "1.0.0",
+  "description": "Ask questions about any public GitHub repository's documentation and architecture through the DeepWiki MCP server.",
+  "author": {
+    "name": "Gena Koveshnikov"
+  },
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}
