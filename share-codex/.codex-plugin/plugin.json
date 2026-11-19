@@ -1,0 +1,29 @@
+{
+  "name": "ef-share",
+  "version": "0.1.0",
+  "description": "Publish Codex sessions to ElasticFlow Share from Codex CLI and the Codex desktop app.",
+  "author": {
+    "name": "ElasticFlow",
+    "url": "https://elasticflow.app"
+  },
+  "homepage": "https://elasticflow.app/share/connect",
+  "repository": "https://github.com/elasticflowapp/plugins",
+  "license": "MIT",
+  "keywords": ["elasticflow", "share", "session", "publish", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ElasticFlow Share",
+    "shortDescription": "Publish this Codex session as a shareable page",
+    "longDescription": "Publish the current Codex session to ElasticFlow Share: a readable page with the conversation, the commands and tools it used, the skills and MCP servers behind it, and a link to pass on. One install serves Codex CLI and the Codex desktop app.",
+    "developerName": "ElasticFlow",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://elasticflow.app/share",
+    "defaultPrompt": [
+      "Publish this session to ElasticFlow Share.",
+      "Share this session as an unlisted link."
+    ],
+    "brandColor": "#4F46E5"
+  }
+}
