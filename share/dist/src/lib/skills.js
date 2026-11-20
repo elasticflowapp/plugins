@@ -2,6 +2,8 @@
 //
 // Pure functions that read a skill's SKILL.md frontmatter and emit
 // publisher-provenance for the share payload. No external YAML dependency.
+import { publicUrl } from "./plugins.js";
+import { records } from "./transcript.js";
 /**
  * Minimal YAML frontmatter parser — top-level scalars plus a one-level
  * `metadata:` map. Handles only the subset we care about; no external dep.
@@ -54,9 +56,11 @@ export function signalFromFrontmatter(name, fm) {
         : {};
     const str = (v) => typeof v === "string" && v ? v : undefined;
     const publisher = str(fm["publisher"]) ?? str(meta["publisher"]);
-    const homepage = str(fm["homepage"]);
-    const repository = str(fm["repository"]);
-    const source = str(fm["source"]);
+    // addresses go out only as web addresses without userinfo (release review
+    // 2026-11-20, A-5); anything else is left out — the server would drop it too
+    const homepage = publicUrl(fm["homepage"]) ?? undefined;
+    const repository = publicUrl(fm["repository"]) ?? undefined;
+    const source = publicUrl(fm["source"]) ?? undefined;
     const author = str(fm["author"]) ?? str(meta["author"]);
     const license = str(fm["license"]);
     const version = str(fm["version"]);
@@ -148,17 +152,7 @@ const CMD_RE = /<command-name>([^<]+)<\/command-name>/g;
 export function parseTranscriptSkills(jsonl) {
     const commandNames = new Set();
     const cwds = new Set();
-    for (const line of jsonl.split("\n")) {
-        const s = line.trim();
-        if (!s)
-            continue;
-        let rec;
-        try {
-            rec = JSON.parse(s);
-        }
-        catch {
-            continue;
-        }
+    for (const rec of records(jsonl)) {
         const cwd = rec["cwd"];
         if (typeof cwd === "string" && cwd)
             cwds.add(cwd);

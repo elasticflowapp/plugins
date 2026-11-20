@@ -15,7 +15,8 @@ export function promptSubmitOutput(payload) {
         hookSpecificOutput: {
             hookEventName: "UserPromptSubmit",
             additionalContext: `The current Claude Code session for /share is: ${marker} ` +
-                `Use this transcript_path; do NOT read ~/.cache/ef-share/active.json.`,
+                `Use this transcript_path (pass it to \`ef-share-session prepare --transcript\`); ` +
+                `do NOT read ~/.cache/ef-share/active.json.`,
         },
     };
 }

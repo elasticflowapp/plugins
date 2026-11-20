@@ -1,5 +1,5 @@
 {
-  "description": "Per-session resolution for /share (SessionStart exports EF_SHARE_TRANSCRIPT_PATH; UserPromptSubmit injects the current transcript on /share) + PreToolUse auto-approves ef-share's own ticketed transcript upload",
+  "description": "Per-session resolution for /share (SessionStart exports EF_SHARE_TRANSCRIPT_PATH; UserPromptSubmit injects the current transcript on /share) + PreToolUse auto-approves ef-share's own publishing steps (its prepare/upload tool and the two authored title files) and hands prepare this session's transcript path",
   "hooks": {
     "SessionStart": [
       {
@@ -19,7 +19,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Write",
         "hooks": [
           { "type": "command", "command": "node \"$CLAUDE_PLUGIN_ROOT\"/dist/src/hooks/pre-tool-use.js", "timeout": 5 }
         ]

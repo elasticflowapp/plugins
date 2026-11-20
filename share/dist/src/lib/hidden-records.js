@@ -13,16 +13,21 @@
 // from every reader-facing surface. Genuine work is never hidden — including work
 // done *after* a publish in the same session.
 //
-// Mirrors the record iteration / `<command-name>` parsing / uuid + sidechain/meta
-// skipping of chapters.ts (the chapter candidate extractor) — keep the two in sync.
+// Shares record iteration, the person-vs-runtime rules and the interrupt marker
+// with chapters.ts (the chapter candidate extractor) through ./transcript.ts.
+import { records, userText as textOf, NON_HUMAN_ORIGINS, INTERRUPT_MARKER } from "./transcript.js";
 /** A share-command user turn opens a publishing span. */
-const SHARE_COMMAND = /^\s*\/(?:ef-share:)?share\b/;
+const SHARE_COMMAND = /^\s*\/?(?:ef-share:)?share\s*$/;
 /** Share MCP tool names (current `mcp__plugin_ef-share_share__*` + the bare `mcp__share__*`). */
 const SHARE_MCP_TOOL = /^mcp__(?:plugin_ef-share_share|share)__/;
 /** Authoring skills invoked during publishing. */
 const PUBLISH_SKILL = /author-chapters|classify-automations/;
 /** Hosts the transcript upload curl targets. */
 const SHARE_HOST = /elasticflow(?:app)?\.app|elasticflow\.dev|\bshare\b.*upload|upload.*\bshare\b/i;
+/** The plugin's own prepare/upload tool (0.12+), run through Bash. */
+const SHARE_TOOL = /\bef-share-session\b/;
+/** The share command started by the model through the Skill tool instead of a typed `/share`. */
+const SHARE_SKILL = /^(?:ef-share:)?share$/;
 /** A published session URL: …/share/<id>. */
 const SHARE_URL = /https?:\/\/\S*\/share\/[A-Za-z0-9]/;
 /** Assistant narration that the publish completed. */
@@ -31,32 +36,6 @@ const PUBLISHED_DONE = /"?share_status"?\s*[:=]?\s*"?done"?|\bPublished:\s|\bsha
 const PUBLISH_REPLY = /\b(public|private|unlisted|visibility|redact|redaction|no redactions|none|don'?t redact|all good|looks good|go ahead|publish it|yes)\b/i;
 const PUBLISH_REPLY_MAX_CHARS = 200;
 const MAX_SPANS = 64;
-function* records(jsonl) {
-    for (const line of jsonl.split("\n")) {
-        const s = line.trim();
-        if (!s)
-            continue;
-        try {
-            yield JSON.parse(s);
-        }
-        catch { /* skip */ }
-    }
-}
-/** The user-visible text of a user record, or null when there is none. */
-function textOf(content) {
-    if (typeof content === "string")
-        return content;
-    if (Array.isArray(content)) {
-        for (const b of content) {
-            if (b && typeof b === "object" && b["type"] === "text") {
-                const t = b["text"];
-                if (typeof t === "string")
-                    return t;
-            }
-        }
-    }
-    return null;
-}
 /** Concatenated text of an assistant record's text blocks (for narration / completion matching). */
 function assistantText(content) {
     if (typeof content === "string")
@@ -98,7 +77,7 @@ function bashCommand(tu) {
 function classify(jsonl) {
     const items = [];
     for (const r of records(jsonl)) {
-        if (r["isMeta"] === true || r["isCompactSummary"] === true || r["isSidechain"] === true)
+        if (r["isCompactSummary"] === true || r["isSidechain"] === true)
             continue;
         const uuid = r["uuid"] ? String(r["uuid"]) : null;
         if (!uuid)
@@ -106,6 +85,16 @@ function classify(jsonl) {
         const type = r["type"];
         const msg = (r["message"] ?? {});
         const content = msg["content"];
+        // isMeta records are runtime plumbing — with one exception. A plugin command that
+        // the runtime expands as a skill (the desktop app, or the model starting /share
+        // through the Skill tool) leaves an isMeta record naming the command; that record
+        // opens the publishing span exactly like a typed `/share`.
+        if (r["isMeta"] === true) {
+            const metaCmd = type === "user" ? commandName(textOf(content) ?? "") : null;
+            if (metaCmd != null && SHARE_COMMAND.test(metaCmd))
+                items.push({ uuid, kind: "share_command", completes: false });
+            continue;
+        }
         if (type === "assistant") {
             const tus = toolUses(content);
             const names = tus.map((t) => String(t["name"] ?? ""));
@@ -116,8 +105,10 @@ function classify(jsonl) {
                 if (String(t["name"] ?? "") !== "Bash")
                     return false;
                 const c = bashCommand(t);
-                return /\bcurl\b/.test(c) && SHARE_HOST.test(c);
+                return (/\bcurl\b/.test(c) && SHARE_HOST.test(c)) || SHARE_TOOL.test(c);
             });
+            // The model starting the share command itself (no typed `/share`) opens the span.
+            const startsShare = tus.some((t) => String(t["name"] ?? "") === "Skill" && SHARE_SKILL.test(String((t["input"] ?? {})["skill"] ?? "").trim()));
             const text = assistantText(content);
             // Completion is ONLY a genuine publish-completed signal (share_status done /
             // "Published:" / a share URL) — a share-MCP tool_use is inside-span machinery,
@@ -130,7 +121,7 @@ function classify(jsonl) {
             const narratesPublish = /\b(publish|share|redact|chapter|automation|upload)\b/i.test(text);
             items.push({
                 uuid,
-                kind: isPublishMachinery ? "publish_machinery" : (narratesPublish ? "publish_machinery" : "skip"),
+                kind: startsShare ? "share_command" : isPublishMachinery ? "publish_machinery" : (narratesPublish ? "publish_machinery" : "skip"),
                 completes,
             });
             continue;
@@ -151,7 +142,17 @@ function classify(jsonl) {
             continue;
         }
         // Runtime plumbing that sometimes arrives without isMeta — never a turn start.
-        if (t.startsWith("<local-command-stdout>") || t.startsWith("<local-command-caveat>")) {
+        // Interrupt markers ([Request interrupted by user …]) are tool-use plumbing INSIDE
+        // a flow, not a genuine human turn (BUG-2026-06-18-01).
+        if (t.startsWith("<local-command-stdout>") || t.startsWith("<local-command-caveat>") || INTERRUPT_MARKER.test(t)) {
+            items.push({ uuid, kind: "skip", completes: false });
+            continue;
+        }
+        // A user record the runtime wrote on its own (a background agent reporting back,
+        // a peer's message, a schedule firing) is not the person resuming work: it must
+        // not end an open publishing span.
+        const origin = r["turnOrigin"];
+        if ((typeof origin === "string" && NON_HUMAN_ORIGINS.has(origin)) || t.startsWith("<task-notification>")) {
             items.push({ uuid, kind: "skip", completes: false });
             continue;
         }

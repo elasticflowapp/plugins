@@ -1,0 +1,8 @@
+#!/usr/bin/env node
+// Launcher for the ef-share plugin's session tool. Claude Code puts a plugin's
+// bin/ directory on the Bash tool's PATH, so `ef-share-session …` resolves here
+// from the terminal CLI and from the desktop app alike.
+import("../dist/bin/session-cli.js").then((m) => m.run(process.argv.slice(2))).catch((err) => {
+  process.stdout.write(JSON.stringify({ error: `ef-share-session could not start: ${err?.message ?? err}` }) + "\n")
+  process.exit(1)
+})

@@ -30,16 +30,20 @@ export function parseSkillsLock(content) {
     }
     return out;
 }
+/** The characters GitHub allows in an owner or repository name. */
+const GITHUB_NAME = /^[A-Za-z0-9_.-]+$/;
 /**
  * Derive { publisher = repo, author = owner, source = URL } from a github
  * lockfile entry whose `source` is exactly "owner/repo". Returns null for a
- * non-github sourceType or a source that is not exactly two path segments.
+ * non-github sourceType, a source that is not exactly two path segments, or a
+ * segment GitHub would not accept — so nothing else (`user:token@host`, a
+ * query) can ride into the URL that is uploaded (release review 2026-11-20, A-5).
  */
 export function provenanceFromLockEntry(entry) {
     if (entry.sourceType !== "github")
         return null;
     const parts = entry.source.split("/").filter(Boolean);
-    if (parts.length !== 2)
+    if (parts.length !== 2 || !parts.every((p) => GITHUB_NAME.test(p)))
         return null;
     const [owner, repo] = parts;
     return { publisher: repo, author: owner, source: `https://github.com/${owner}/${repo}` };

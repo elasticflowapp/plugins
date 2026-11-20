@@ -1,52 +1,55 @@
 ---
 name: author-chapters
-description: Use during /share publishing to produce the ElasticFlow `chapters` payload — runs the deterministic candidate extractor, then groups the session's turns into 3-12 semantically titled chapters.
+description: Use during /share publishing to produce the ElasticFlow `chapters` payload — reads the turn candidates `ef-share-session prepare` extracted, then groups the session's turns into 3-12 semantically titled chapters and writes them to the prepared directory.
 ---
 
 # Author session Chapters
 
 Chapters are the session's reading narrative on ElasticFlow Share: the ToC
 accordion, the collapsed-middle cards, and the `/{id}/ch-{n}` pages. The
-deterministic helper lists every human user turn with its REAL record uuid.
-Your job is to GROUP those turns into chapters and TITLE them. Never invent
-uuids — the server rejects fabricated anchors and falls back to a dumb
-time-gap heuristic, losing your semantic structure.
+deterministic step already listed every turn the PERSON started, with its REAL
+record uuid. Your job is to GROUP those turns into chapters and TITLE them.
+Never invent a uuid — an anchor that is not in the list is refused.
+
+You are given `dir`, the directory `ef-share-session prepare` printed.
 
 ## Steps
 
-1. Run the extractor on the transcript:
+1. Print the candidates:
    ```
-   node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-chapters.js" "<transcript_path>"
+   ef-share-session show chapters --dir "<dir>"
    ```
-   (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-chapters.ts" "<transcript_path>"`.)
-   It prints `{ chapter_contract_version, runtime, total_candidates, turns[] }` where each
-   turn has `start_record_ref`, `ts`, `gap_minutes_before`, `slash`, `preview`.
+   (If the shell answers `command not found`: `node "${CLAUDE_PLUGIN_ROOT}/bin/ef-share-session" show chapters --dir "<dir>"`.)
+   It prints `{ write_to, format, turns[] }`; each turn has `start_record_ref`, `ts`,
+   `gap_minutes_before`, `slash`, `preview`. Background agents reporting back, other
+   agents' messages, scheduled prompts and the runtime's own "[Request interrupted…]"
+   marker are already left out — every listed turn is something the person typed.
+   The turns of a publish (`/share` and the answers to its questions) are not listed
+   either: readers are not shown them, so there is no chapter for publishing.
 
 2. Read the `turns` in order and group them into **3-12 chapters** (never more than 16;
    a session under ~10 turns is fine as 1-2 chapters). While reading, determine the
    session's predominant human language from the `preview`s (the language the USER
-   writes in, ignoring code/paths/tool noise) — output it as a BCP-47 primary tag
-   (`ru`, `en`, `fi`, …). A chapter is a coherent phase of
-   work. Boundary signals, strongest first:
+   writes in, ignoring code/paths/tool noise) — a lowercase primary tag (`ru`, `en`,
+   `fi`, …). A chapter is a coherent phase of work. Boundary signals, strongest first:
    - the topic of the `preview`s shifts (new goal, new artifact, new problem);
    - `gap_minutes_before` ≥ 30 (the author walked away);
-   - the dominant `slash` workflow changes (e.g. brainstorming → implementation → publishing).
+   - the dominant `slash` workflow changes (e.g. brainstorming → implementation → review).
    Do NOT start a new chapter on every slash command — the same command often repeats
    within one phase.
 
-3. For each chapter emit:
-   - `start_record_ref`: the `start_record_ref` of its FIRST turn — copied verbatim from
-     the extractor output. The first chapter MUST use the first listed turn. Refs must
-     appear in the same order as in `turns` (strictly increasing).
-   - `title`: ≤120 chars, plain English (catalogue language, regardless of the session's
-     conversation language), names what HAPPENED in that phase ("Designing the hooks
-     visualization", not "Discussion"). Titles are English (navigation/catalogue layer);
-     hints are session-language (content layer).
+3. For each chapter:
+   - `start_record_ref`: the `start_record_ref` of its FIRST turn, copied verbatim. The
+     first chapter MUST use the first listed turn. Refs follow the list order, one
+     chapter per ref.
+   - `title`: ≤120 chars, plain English (the catalogue language, whatever language the
+     session is in), names what HAPPENED in that phase ("Designing the hooks
+     visualization", not "Discussion").
    - `hint` (REQUIRED): one line (≤200 chars) summarizing what happens inside the
-     chapter, written in the SESSION language detected above — this is the
-     reader-facing summary of collapsed content.
+     chapter, in the SESSION language — the reader-facing summary of collapsed content.
 
-4. Output ONLY the JSON object, e.g. (an English-language session):
+4. Write the result with the Write tool to the `write_to` path from step 1
+   (`<dir>/authored/chapters.json`), e.g. for an English-language session:
    ```json
    {
      "language": "en",
@@ -56,15 +59,15 @@ time-gap heuristic, losing your semantic structure.
      ]
    }
    ```
-   `chapters` becomes the `chapters` value for `share_publish`; `language` becomes its
-   `language` value.
+   The upload step checks this file against the candidates and names any mistake
+   before anything is sent: a ref that is not in the list, a chapter without its
+   hint, a key other than `start_record_ref` / `title` / `hint`.
 
 ## Rules
-- Only uuids that appear in the extractor's `turns[]`; never edit, merge, or invent refs.
+- Only uuids that appear in `turns[]`; never edit, merge, or invent refs.
 - Keep refs in list order; one chapter per ref; no duplicate refs.
 - Titles describe the work truthfully — no marketing language.
-- Every chapter MUST carry a hint.
-- If you cannot determine the language confidently, omit `language` rather than guessing
-  — still write each hint in the language the user appears to use; only the top-level
-  `language` field is omitted.
-- If the extractor returns no turns, skip chapters entirely (call `share_publish` without it).
+- Every chapter MUST carry a hint, and nothing but `start_record_ref`, `title` and `hint`.
+- If you cannot determine the language confidently, leave `language` out rather than
+  guessing — still write each hint in the language the user appears to use.
+- If `turns` is empty, write nothing: the session is published without client chapters.

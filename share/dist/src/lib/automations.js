@@ -1,3 +1,11 @@
+// packages/ef-share-plugin/src/lib/automations.ts
+//
+// MIRRORS the firing-parse + phase/source logic in
+// viewer/lib/automations/raw-firings.ts (server side). The server independently
+// re-derives objective facts from the same raw shapes, so the two MUST agree on
+// phaseOf / sourceOf / which records are hook firings. Keep them in sync — a
+// divergence makes client signatures disagree with server derivation (ADR-0008).
+import { records } from "./transcript.js";
 function phaseOf(n) {
     const h = (n.split(":")[0] ?? "").trim();
     return { SessionStart: "session_start", Stop: "session_end", SubagentStop: "subagent_end", UserPromptSubmit: "user_prompt", PreToolUse: "before_tool", PostToolUse: "after_tool", PostToolUseFailure: "after_tool", PreCompact: "before_compact", Notification: "notification" }[h] ?? "other";
@@ -36,17 +44,6 @@ function successInjection(stdout) {
     }
     catch {
         return "";
-    }
-}
-function* records(jsonl) {
-    for (const line of jsonl.split("\n")) {
-        const s = line.trim();
-        if (!s)
-            continue;
-        try {
-            yield JSON.parse(s);
-        }
-        catch { /* skip */ }
     }
 }
 function firings(jsonl) {

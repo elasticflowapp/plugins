@@ -4,48 +4,78 @@ description: Publish this session to ElasticFlow Share
 
 # /share
 
-Workflow:
+Publishes THIS session — the conversation, the sub-agents it delegated to, and how it was run — to ElasticFlow Share. With the person's explicit yes it also publishes the results the session made (an HTML page a reader can run). Works the same from the terminal and from the desktop app.
 
-1. Resolve THIS session's transcript path (do NOT read any shared/global file):
-   a. Use the injected `<EF-SHARE-CURRENT transcript_path="…" … />` marker in context if present.
-   b. Else run `printf '%s' "$EF_SHARE_TRANSCRIPT_PATH"` (Bash). If non-empty, use it.
-   c. Else ABORT: "Couldn't resolve the current session's transcript — not publishing." Do NOT guess.
-   d. SNAPSHOT it — the live transcript keeps growing while you work, and the server
-      rejects automation/chapter refs that aren't in the uploaded file:
-      `SNAP=$(mktemp /tmp/ef-share-XXXXXX).jsonl && cp "<transcript_path>" "$SNAP"`
-      Use `$SNAP` for the upload AND for both extractor skills below.
-2. Call `mcp__share__share_begin({})`. On the first call this session, Claude Code prompts for OAuth — wait for approval. Receive `{ stagingId, uploadUrl, ticket }`.
-3. Upload the transcript with the Bash tool (the file streams from disk — never paste its contents):
-   ```
-   curl -sS -X POST "<uploadUrl>" -H "X-Upload-Ticket: <ticket>" -F "session.jsonl=@$SNAP;type=application/jsonl"
-   ```
-   The response is JSON: `{ suggestedTitle, redactionCandidates, metadata }`.
-   - If `curl` is missing or the upload returns a non-2xx status, report the error and stop (do not publish).
-4. Draft a title (<=80, may start from `suggestedTitle`), summary (<=300), 3-5 lowercase hyphenated tags, 3-7 "this session shows…" bullets (tos). Show the user `redactionCandidates` and ask which to redact. Ask: public, private, or unlisted?
-5. Classify Automations: invoke the `classify-automations` skill with the SNAPSHOT path `$SNAP`. It returns the `automations` JSON object. Pass it **verbatim** — do NOT post-process it with a script or by hand. Never change `classified_by`, `signature`, `kind_id`, or `record_ref`: the server rejects an out-of-enum `classified_by` and any unknown `record_ref`. The skill is the only thing that authors `title`/`why`. (Automations is optional — if it's invalid the server now drops just that panel instead of failing the publish — but don't corrupt it.)
-6. Author Chapters: invoke the `author-chapters` skill with the same `$SNAP`. It returns `{ language, chapters }` — English titles (navigation/catalogue layer), session-language hints (content layer). Keep it verbatim (omit the `chapters` param entirely if the skill returned no chapters).
-7. Hidden (publishing) records: run the deterministic extractor on the SNAPSHOT to mark this plugin's own publishing flow so it's hidden from readers:
-   ```
-   node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-hidden-records.js" "$SNAP"
-   ```
-   (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-hidden-records.ts" "$SNAP"`.) It prints `{ hidden_records }` — keep the array verbatim (it's `[]` when there's nothing to hide, e.g. the very first publish).
-7.5. Skill provenance: run the deterministic extractor on the SNAPSHOT to collect publisher attribution for any third-party skills invoked during the session:
-   ```
-   node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-skills.js" "$SNAP"
-   ```
-   (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-skills.ts" "$SNAP"`.) It prints `{ skill_contract_version, runtime, skills[] }`. Pass the entire object verbatim as the top-level `skills` argument to `share_publish`. If the script fails or `skills` is empty, omit `skills` entirely — this enrichment is best-effort and never causes a publish failure.
-7.6. Plugin source provenance: run the deterministic extractor to collect the installed-plugin registry and resolve each plugin's real source/origin:
-   ```
-   node "$CLAUDE_PLUGIN_ROOT/dist/bin/extract-plugins.js"
-   ```
-   (If `dist` is absent, run `npx tsx "$CLAUDE_PLUGIN_ROOT/bin/extract-plugins.ts"`.) It prints `{ plugin_contract_version, runtime, plugins[] }`. Pass the entire object verbatim as the top-level `plugins` argument to `share_publish`. If the script fails or `plugins` is empty, omit `plugins` entirely — this enrichment is best-effort and never causes a publish failure.
-8. Call `mcp__share__share_publish({ stagingId, visibility, title, summary, tags, tos, redactions, automations, chapters, language, hidden_records, skills, plugins })` (omit `language` if the skill did not return one; pass `hidden_records` as returned — `[]` is fine; omit `skills` entirely if step 7.5 produced no skills; omit `plugins` entirely if step 7.6 produced no plugins). Receive `{ jobId }`.
-9. Poll `mcp__share__share_status({ jobId })` every 2s until `state === "done"` or `"failed"` (max 30). Report "Published: <url> — visibility: <chosen>" or the error.
-   - If the terminal status carries `redactionWarnings`, the publish still succeeded but the server detected secret(s) that were NOT redacted. Show the user `redactionWarnings` (kind + preview + location) and `redactionRemediation`: re-run `/share` for this same session with those spans added to `redactions` — it scrubs the leak in place under the same URL.
-   - If the terminal status carries `enrichmentWarnings`, the publish still succeeded but an optional panel (e.g. automations) was dropped server-side. Report which and why; do NOT retry for it (the rest of the session published fine).
-   - If `state === "failed"`: read the error, then retry on a fresh `share_begin` + re-upload (step 2-3), **preserving every field except the one the error names** — e.g. only drop or repair `automations` when the error is about automations. NEVER drop `hidden_records` or `redactions` on a retry: they are correctness/privacy fields, not optional enrichments. (`hidden_records` is also detected server-side now, so the publishing flow is hidden even if you ever omit it — but still always send it.)
+The deterministic work is done by the plugin's own tool, `ef-share-session`, which is on the Bash tool's PATH. You decide and author; you never retype a uuid, never paste transcript content, never read a shared or global file to find the session.
 
-Notes:
-- Works for any session size — the transcript is uploaded directly from disk, not through the model.
-- The ticket is single-use and short-lived; if the upload fails with an expired/used ticket, re-run step 2 (`share_begin`) for a fresh one.
-- One authorization only (the `share` MCP OAuth); the upload uses the ticket, not your token.
+The plugin's MCP tools are named `mcp__plugin_ef-share_share__share_begin`, `…__share_publish` and `…__share_status` (on an install where the `share` server was added by hand: `mcp__share__share_begin`, …). Below they are called `share_begin`, `share_publish` and `share_status`.
+
+## Workflow
+
+1. **Prepare.** Run with the Bash tool, exactly:
+   ```
+   ef-share-session prepare
+   ```
+   - The plugin supplies this session's transcript path itself. If the output is `{"error": "could not resolve this session's transcript…"}`, re-run with the path from the `<EF-SHARE-CURRENT transcript_path="…" />` marker in context: `ef-share-session prepare --transcript "<transcript_path>"`. If there is no marker either, STOP: "Couldn't resolve the current session's transcript — not publishing." Do NOT guess a path.
+   - If the shell answers `command not found`, run `node "${CLAUDE_PLUGIN_ROOT}/bin/ef-share-session" prepare` instead, and use that same prefix for every `ef-share-session` command below.
+   - It prints one JSON object. Keep `dir` — every later step uses it. It read the transcript once, so everything below refers to the same snapshot even though the live session keeps growing.
+   - Each option is given once; `--result` is the one that may be repeated, once per page. Do not add options this file does not name.
+   - **If a line of `warnings` says the upload `will refuse to send it` or `will be refused`, STOP here.** The session is too large to publish as it is: tell the person so, with the sizes from that line, and do nothing further — no questions, no chapters, no `share_begin`. Nothing has left the machine.
+
+2. **Tell the person what leaves this machine and what does not**, in a few lines, from the prepare output:
+   - what is published: `transcript.records_published` transcript records and `subagents.count` sub-agent transcripts (`by_type`). With them goes how the session was set up: the plugins it had enabled — `plugins.sent` of them, name them from `plugins.sent_names`; each with its source address and version (`plugins.installed_not_sent` other installed plugins are not sent) — the list of skills and the text of the skills it used, and the definitions of the MCP tools that were connected. Folder paths of this machine that appear in the session (the working directory, paths in commands and their output) are part of it;
+   - what stays: `transcript.records_left_on_this_machine` records — name the kinds in `left_on_this_machine_by_kind` (the system prompt, CLAUDE.md and memory contents loaded as instructions, account details, the raw API requests); the same is listed for the sub-agent transcripts under `subagents.left_on_this_machine_by_kind`;
+   - what was taken out of the published records — say each only when its number is greater than 0: `transcript.instruction_blocks_withheld` and `subagents.instruction_blocks_withheld` copies of an instruction file (CLAUDE.md, memory) that Claude Code had put into its own messages were cut; and the account's own identifiers were replaced by a placeholder where they stood — in folder paths, command output or text — `account_identifiers_replaced` under `transcript` and `subagents` counts the places for the organisation id, the account id and the account e-mail. What is looked for is the account this Claude Code is signed in to (from its own account record) and the ids the session's own records and folders name: the address of any other account, or an id written another way, is conversation text and shows up, if at all, among the redaction candidates of step 7. Never print an identifier itself;
+   - **when `transcript.hook_injections_published` is greater than 0, say so plainly**: "N pieces of context your own hooks added to the session are part of it and will be published — if a hook of yours injects memory notes or instructions, that text is included." They can be redacted in step 7 like anything else.
+   - Relay every line of `warnings` as written.
+
+3. **Ask what to publish.** Use AskUserQuestion when it is available (plain questions otherwise), one call:
+   - **Visibility**: public, unlisted or private.
+   - **Results — only when `results` is not empty.** Ask whether to share the results of the work as well, or only the session. This question is REQUIRED: a result is published only on an explicit yes given in this /share run — never by default, never because an earlier publish included it, never because the person said "share everything" before seeing the list.
+     - A result is published byte for byte and cannot be redacted afterwards, so show what it IS, not how big it is: for each candidate its `entry` and `path`, **every file in `files` by name**, `total_bytes`, the hosts in `loads_from_network` (contacted when a reader runs it — only these are allowed), and each entry of `not_published` with its reason (those references will be missing in the published result).
+     - Say that a picture of each published page is taken on this machine and published with it — it is what a reader sees before they run the result. To take it, the page is opened once at upload in the installed Chrome, Edge, Chromium or Brave, without a window: its scripts run on this machine and it contacts the hosts in `loads_from_network` from here (a page that uses WebRTC can also reach other addresses from this machine — the policy does not govern WebRTC). Before anything is public the person is told what the picture shows and where the file is (step 6), and the result can be published without one.
+     - A candidate with `blocked` set cannot be published; say why. One with `fits_this_upload: false` is too large to go with this session (`room_for_results_bytes` is what is left); say so.
+     - Let the person pick any subset of up to 12 results (what one publish takes); "only the session" is always an option.
+     - A private session serves no result to anyone. If the person chose private and a result, tell them the result will be stored but not shown until the session is made unlisted or public.
+   - If the person names a result that is not listed (a page made by a script, for instance), run prepare again with `--result "<path>"` added and ask again from the new output — the named page is listed first. That run goes through the normal permission prompt (it reads a file the session did not make); that is expected.
+
+4. **Author the chapters**: invoke the `author-chapters` skill with `dir`. It writes `<dir>/authored/chapters.json`.
+
+5. **Classify the automations** — only when `automations.kinds` is greater than 0: invoke the `classify-automations` skill with `dir`. It writes `<dir>/authored/automations.json`.
+
+6. **Begin and upload.** Call `share_begin({})` (on the first call in a session Claude Code asks for OAuth — wait for approval). It returns `{ stagingId, uploadUrl, ticket }`. Then, with the Bash tool:
+   ```
+   ef-share-session upload --dir "<dir>" --url "<uploadUrl>" --ticket "<ticket>" --results none
+   ```
+   Replace `none` with the comma-separated ids the person chose in step 3 (`--results 1,3`) — only those, in that one option. Add `--pictures none` to publish results without their preview pictures. An upload that carries results asks the person for permission once more; that is expected. The command sends the transcript, the sub-agent transcripts, the prepared enrichment and the chosen results in one request, and prints one object: `ok`, `status`, `staged`, `notes` and `sent` first, then `response` (the server's answer without its list of redaction candidates), then `redaction` (step 7). Everything you decide on is in that output; the server's whole answer is also saved in `response_file`.
+   - **Exit code 2** — nothing was sent and the ticket is still unused; the message says what to fix: `--dir` is not the directory prepare printed (use `dir` from step 1 as it is; never copy or move it); an authored file is wrong (a chapter anchored on a uuid that is not a turn, a missing hint, a misspelt key…) — fix the file it names; the upload is over the size the endpoint takes — leave out a result (when no result was chosen there is nothing to leave out: the session itself is too large to publish — say so and stop); a result's files changed since they were listed — run prepare again. Then run the same command again.
+   - **Exit code 1** — the request was made and did not succeed. `status` 401: the ticket expired or was used — call `share_begin` again and re-run upload with the new values. Anything else: report `status` and `notes` and stop; do not publish. When the output is only `{ "error": … }`, the upload did not complete and the message says why — no answer from the server, a redirect that was not followed, a failure on this machine. Relay it and stop; nothing was published.
+   - **Look at the pictures before publishing.** For each result, `sent.results[].preview` says whether a picture goes with it and `preview_file` is that picture on this machine. Read each `preview_file` (it is an image), tell the person in one line what it shows, and give them its path so they can open it themselves. A picture is published as it is and nothing scans it: if it shows anything that is not the result — an error page, a blank or half-drawn page, an animation caught at its start, data the person may not want public — say so and ask whether to publish with it. To publish without pictures, call `share_begin` again and re-run the upload with `--pictures none` added.
+   - A result with `preview: false` is published without a picture. `notes` gives the reason for each one — relay it as written, because what to do differs: no browser was found (install Chrome, Edge, Chromium or Brave, or name one in `EF_SHARE_BROWSER`, then publish again); pictures are turned off (`EF_SHARE_PREVIEW=off`); the page had drawn nothing after loading and four seconds of its timers, or was still not drawn in time (a result that draws only after a click or a long animation has no picture to take — installing something will not change it); the pictures did not fit the upload; the server does not take pictures yet.
+   - `response.resultWarnings` present: a result file holds what looks like a secret (file, kind and a preview are listed). Nothing in a result can be redacted. Show the findings and ask: publish anyway, or leave that result out (call `share_begin` again and re-run the upload with `--results` without it), or stop so the file can be fixed first.
+
+7. **Redactions.** `redaction` in the upload's output describes the places that may hold sensitive data. `total` and `by_severity` count them; `candidates` lists the `secret`-severity ones, one per line, exactly as the server returned them; `all_candidates_file` holds the complete list — the `hint`-severity ones too — one JSON object per line, secret first. Show the listed ones with their `kind` and `text_preview`, and ask which to redact.
+   - When `by_severity.secret` is greater than `listed_here`, the rest of the secret-severity ones did not fit the output: read them from `all_candidates_file` before asking. Offer the `hint` ones (paths, addresses) by their count; read them from the file only if the person wants to go through them.
+   - `left_out_by_the_server`, when present, is how many more places the server found in sub-agent transcripts and did not list. Tell the person the number: those cannot be picked one by one.
+   - A candidate with a `file` field is in a sub-agent's transcript. It stands for EVERY occurrence of that value in every sub-agent file (`occurrences` says how many); redacting it removes them all.
+   - A value redacted in the main transcript is also removed from every sub-agent file that repeats it. The reverse does not hold: a sub-agent candidate does not touch the main transcript — when the same value is listed there as well, redact that candidate too.
+   - Each chosen candidate goes into `redactions` exactly as it is listed — `turn_idx`, `block_idx`, `path`, `span_start`, `span_end`, `replacement`, and `file` when it has one. Never invent a `file`: a redaction that names a file the upload did not carry fails the publish.
+
+8. **Draft** — what you write here and in the chapter titles is published exactly as you write it; nothing replaces an e-mail address, an account or organisation id or a folder path of this machine in it, so leave them out. Draft a title (≤80 chars; may start from `response.suggestedTitle`), a summary (≤300 chars), 3–5 lowercase hyphenated tags and 3–7 "this session shows…" bullets (`tos`). Say what was actually done and how — the sub-agents, skills, MCP servers or commands that mattered — not what was hoped for.
+
+9. **Publish.** Call `share_publish({ stagingId, visibility, title, summary, tags, tos, redactions })`. Chapters, automations, hidden records, skills, plugins and workflows were staged by the upload — do NOT pass them again.
+   - Only if the upload printed `"staged": false` (an older server that kept just the transcript): pass them as arguments instead, each read verbatim from `<dir>/final/` — `automations` from `automations.json`, `chapters` and `language` from `chapters.json`, `hidden_records` from `hidden_records.json`, `skills` from `skills.json`, `plugins` from `plugins.json`. Omit any file that does not exist. Tell the person that sub-agents and results were not taken by this server.
+
+10. **Poll** `share_status({ jobId })` every 2 s until `state` is `"done"` or `"failed"` (at most 30 times). Report `Published: <link> — visibility: <chosen>`, followed by one line of what it contains: the session, N sub-agent transcripts, and each result by name — or "session only".
+    - `<link>` is the session's full address. `share_status` returns `url` as a path (`/1a2b3c4d`): put it after the site's address, which is the `uploadUrl` of step 6 without its `/api/share/upload` ending — `https://elasticflow.app/share/api/share/upload` and `/1a2b3c4d` give `https://elasticflow.app/share/1a2b3c4d`. Never report the bare path.
+    - `redactionWarnings` present: the publish succeeded but the server found secret(s) that were NOT redacted. Show them (kind + preview + location) and `redactionRemediation`: running `/share` again for this same session with those spans added to `redactions` scrubs them in place under the same URL.
+    - `enrichmentWarnings` present: an optional part was dropped server-side — a panel, or a result that could not be stored. Report which and why; do NOT retry for it. One kind is not a failure and is not reported: an entry for `plugins` whose reasons all read `plugin "…" not used in session — dropped` is the server leaving out plugins the session did not use.
+    - `state` is `"failed"`: read the error, then retry from step 6 (a fresh `share_begin` and the same upload command), changing only what the error names. NEVER drop `redactions` on a retry, and never add a result the person did not choose. What was published before stays as it was.
+
+## Notes
+
+- Works for any session size the endpoint takes: the files go from disk to the server, never through the model. The size prepare reports (`upload_estimate_bytes`) is the request upload sends. When it would not fit, the main transcript goes compressed, then sub-agent tool output (never the main transcript) is cut and `warnings` says so; an upload that still does not fit is refused before anything is sent.
+- The ticket is single-use and short-lived (5 minutes): call `share_begin` right before the upload, not earlier.
+- One authorization only — the `share` MCP OAuth. The upload uses the ticket, not your token, and `ef-share-session upload` refuses any destination that is not an ElasticFlow Share endpoint.
+- Publishing the same session again appends what happened since: the URL stays the same. Publishing it again without a result takes that result down.
+- The prepared directory is a private copy of the session in the temp folder; prepare removes the ones it left more than a day ago.
