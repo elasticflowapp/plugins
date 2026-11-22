@@ -37,6 +37,17 @@
 //   - an upload over plain http or to a loopback address: the tool takes those
 //     for local development, an injected command does not get them for free
 //     (review 2026-11-20, A-7);
+//   - an upload to any host or port but the plugin's own server's — the one its
+//     MCP address names (src/lib/upload-url.ts; release review 2026-11-20, note 10);
+//   - anything — `prepare` included, which would write the copy of the session
+//     there — while the tool's work directory is inside the session's project,
+//     whether EF_SHARE_WORK_DIR or TMPDIR names it and under whatever name: a
+//     repository's settings can set either, and the session writes there without
+//     a prompt (same note; review of 0.12.1, R1-1, R1-2);
+//   - anything when the hook input does not say where the session is (`cwd`,
+//     which Claude Code sends with every hook input, or CLAUDE_PROJECT_DIR): the
+//     rule above cannot be asked, and what cannot be checked is not approved
+//     (R1-11);
 //   - `prepare --out <dir>`: only the tool's own temp directory is written
 //     without a prompt;
 //   - `prepare --result <path>`: it reports whether any file exists and what an
@@ -62,7 +73,7 @@
 import path from "node:path";
 import { parseCommandArgs, flag, COMMAND_SPECS } from "../lib/cli-args.js";
 import { isAutoApprovedUploadUrl } from "../lib/upload-url.js";
-import { checkPreparedDir, lstatOrNull } from "../lib/prepared-dir.js";
+import { checkPreparedDir, lstatOrNull, workDirInsideProject } from "../lib/prepared-dir.js";
 const TOOL = "ef-share-session";
 /** Characters a bare (unquoted) word may contain: nothing any shell expands. */
 const BARE = /[\p{L}\p{M}\p{N}_\-./:=,@%+]/u;
@@ -209,10 +220,17 @@ const isAbsolutePath = (p) => typeof p === "string" && p !== "" && path.isAbsolu
  * A directory prepared with `--out` elsewhere is the tool's to take, not the
  * hook's to approve.
  */
-export function isPreparedDirFor(dir, transcriptPath) {
+export function isPreparedDirFor(dir, transcriptPath, projectDirs = [], home) {
     if (!isAbsolutePath(dir) || !isAbsolutePath(transcriptPath))
         return false;
-    return checkPreparedDir(dir, { transcriptPath }).ok;
+    return checkPreparedDir(dir, { transcriptPath, projectDirs, ...(home === undefined ? {} : { home }) }).ok;
+}
+/**
+ * The session's project: where it is now (`cwd` of the hook input) and where it
+ * started (CLAUDE_PROJECT_DIR, which Claude Code exports to a hook's command).
+ */
+function sessionProjectDirs(payload) {
+    return [payload.cwd, process.env.CLAUDE_PROJECT_DIR].filter(isAbsolutePath);
 }
 /**
  * True iff `filePath` is one of the two files the publishing agent authors —
@@ -221,7 +239,7 @@ export function isPreparedDirFor(dir, transcriptPath) {
  * folder and the file not there yet or a plain file of its own: no symbolic
  * link and no hard link a Write could be sent through (review 2026-11-20, A-2).
  */
-export function isAuthoredFile(filePath, transcriptPath) {
+export function isAuthoredFile(filePath, transcriptPath, projectDirs = [], home) {
     if (!isAbsolutePath(filePath))
         return false;
     const norm = path.normalize(filePath);
@@ -233,7 +251,7 @@ export function isAuthoredFile(filePath, transcriptPath) {
     const authoredDir = path.dirname(norm);
     if (path.basename(authoredDir) !== "authored")
         return false;
-    if (!isPreparedDirFor(path.dirname(authoredDir), transcriptPath))
+    if (!isPreparedDirFor(path.dirname(authoredDir), transcriptPath, projectDirs, home))
         return false;
     const folder = lstatOrNull(authoredDir);
     if (!folder || folder.isSymbolicLink() || !folder.isDirectory())
@@ -272,9 +290,19 @@ function decide(payload, deps) {
         return {};
     if (payload.transcript_path !== undefined && typeof payload.transcript_path !== "string")
         return {};
+    if (payload.cwd !== undefined && typeof payload.cwd !== "string")
+        return {};
     const session = payload.transcript_path;
+    // Where the session is. Without it the work directory cannot be told from the project: no opinion.
+    // A place given in a form Claude Code does not send — not an absolute path — is not interpreted either.
+    const named = [payload.cwd, process.env.CLAUDE_PROJECT_DIR].filter((p) => p !== undefined && p !== "");
+    if (named.some((p) => !isAbsolutePath(p)))
+        return {};
+    const project = sessionProjectDirs(payload);
+    if (project.length === 0)
+        return {};
     if (payload.tool_name === "Write") {
-        if (!isAuthoredFile(input.file_path, session))
+        if (!isAuthoredFile(input.file_path, session, project, deps.home))
             return {};
         return allow("ef-share: the publishing agent writes its chapter / automation titles into the directory ef-share prepared for this publish — no other file.");
     }
@@ -286,7 +314,10 @@ function decide(payload, deps) {
     const call = parseSessionToolCall(command);
     if (!call)
         return {};
-    const isPrepared = deps.isPrepared ?? isPreparedDirFor;
+    // every command of the tool reads or writes in its work directory — `prepare` puts the copy of the session there
+    if (workDirInsideProject(project, process.env, deps.home) !== null)
+        return {};
+    const isPrepared = deps.isPrepared ?? ((dir, transcriptPath, projectDirs) => isPreparedDirFor(dir, transcriptPath, projectDirs, deps.home));
     if (call.subcommand === "upload") {
         // Results are the person's call: no auto-approval for an upload that carries any.
         const results = flag(call.parsed, "results");
@@ -295,13 +326,13 @@ function decide(payload, deps) {
         const url = flag(call.parsed, "url");
         if (!url || !isAutoApprovedUploadUrl(url))
             return {};
-        if (!isPrepared(flag(call.parsed, "dir"), session))
+        if (!isPrepared(flag(call.parsed, "dir"), session, project))
             return {};
-        return allow("ef-share: authorized its own upload of this session to ElasticFlow Share (no result files). " +
+        return allow("ef-share: authorized its own upload of this session to the ElasticFlow Share server the plugin is connected to (no result files). " +
             "The tool refuses any destination that is not an ElasticFlow Share endpoint.");
     }
     if (call.subcommand === "show") {
-        if (!isPrepared(flag(call.parsed, "dir"), session))
+        if (!isPrepared(flag(call.parsed, "dir"), session, project))
             return {};
         return allow("ef-share: reads the candidates it prepared for this session. Nothing is written or sent.");
     }

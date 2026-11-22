@@ -73,12 +73,13 @@ export function listSubagentFiles(transcriptPath) {
 }
 function str(v) { return typeof v === "string" && v ? v : null; }
 function num(v) { return typeof v === "number" && Number.isFinite(v) ? v : null; }
+const plainCut = (text, max) => text.slice(0, max);
 /**
- * The Workflow runs of the session, as their own run records describe them.
- * The run's script is left out on purpose: it is already in the transcript as
- * the Workflow tool call's input, where redaction can reach it.
+ * The run records of the session, whole — the script included. prepare reads them
+ * for the ids a path in them names BEFORE it writes anything (release review
+ * 2026-11-20, note 4); what is published of a run is describeWorkflowRun's.
  */
-export function listWorkflowRuns(transcriptPath) {
+export function readWorkflowRunRecords(transcriptPath) {
     const wfDir = path.join(sessionDirFor(transcriptPath), "workflows");
     if (!isDir(wfDir))
         return [];
@@ -93,27 +94,46 @@ export function listWorkflowRuns(transcriptPath) {
         catch {
             continue;
         }
+        if (!raw || typeof raw !== "object" || Array.isArray(raw))
+            continue;
         const runId = str(raw["runId"]) ?? path.basename(name, ".json");
         if (!RUN_ID.test(runId))
             continue;
-        const phases = Array.isArray(raw["phases"]) ? raw["phases"] : [];
-        out.push({
-            run_id: runId,
-            name: str(raw["workflowName"]),
-            status: str(raw["status"]),
-            started_at: str(raw["timestamp"]),
-            duration_ms: num(raw["durationMs"]),
-            agent_count: num(raw["agentCount"]),
-            total_tokens: num(raw["totalTokens"]),
-            total_tool_calls: num(raw["totalToolCalls"]),
-            default_model: str(raw["defaultModel"]),
-            summary: str(raw["summary"])?.slice(0, 600) ?? null,
-            phases: phases
-                .filter((p) => !!p && typeof p === "object")
-                .map((p) => ({ title: (str(p["title"]) ?? "").slice(0, 120), detail: str(p["detail"])?.slice(0, 300) ?? null }))
-                .filter((p) => p.title)
-                .slice(0, 24),
-        });
+        out.push({ runId, raw: raw });
     }
     return out;
+}
+/**
+ * What is published of a run. The run's script is left out on purpose: it is
+ * already in the transcript as the Workflow tool call's input, where redaction
+ * can reach it. The texts that have a limit go through `cut`.
+ */
+export function describeWorkflowRun({ runId, raw }, cut = plainCut) {
+    const phases = Array.isArray(raw["phases"]) ? raw["phases"] : [];
+    const summary = str(raw["summary"]);
+    return {
+        run_id: runId,
+        name: str(raw["workflowName"]),
+        status: str(raw["status"]),
+        started_at: str(raw["timestamp"]),
+        duration_ms: num(raw["durationMs"]),
+        agent_count: num(raw["agentCount"]),
+        total_tokens: num(raw["totalTokens"]),
+        total_tool_calls: num(raw["totalToolCalls"]),
+        default_model: str(raw["defaultModel"]),
+        summary: summary === null ? null : cut(summary, 600),
+        phases: phases
+            .filter((p) => !!p && typeof p === "object")
+            // a phase is one only when it has a title: tested on the title as recorded, before anything is cut
+            .filter((p) => str(p["title"]) !== null)
+            .slice(0, 24)
+            .map((p) => {
+            const detail = str(p["detail"]);
+            return { title: cut(str(p["title"]), 120), detail: detail === null ? null : cut(detail, 300) };
+        }),
+    };
+}
+/** The Workflow runs of the session, as their own run records describe them. */
+export function listWorkflowRuns(transcriptPath, cut = plainCut) {
+    return readWorkflowRunRecords(transcriptPath).map((r) => describeWorkflowRun(r, cut));
 }

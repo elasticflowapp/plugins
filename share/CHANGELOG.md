@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-22
+
+Closes the notes the 0.12.0 release review left open. The shapes and counts
+named here were measured on 2026-11-21 on Claude Code 2.1.271–2.1.326.
+
+### Changed
+- **The account of every Claude app on the machine is replaced, not only the
+  one that runs `/share`.** The desktop app keeps its own record of the account
+  it is signed in to, per session, and that can be another account than the
+  terminal's: its address then stood in what a terminal session published — a
+  git author line, a tool input. `prepare` now reads all of these records:
+  `$CLAUDE_CONFIG_DIR/.claude.json`, `~/.claude.json`, and the desktop app's
+  `local-agent-mode-sessions/<account>/<organisation>/local_*/.claude/.claude.json`
+  — whose folders name both ids even where a record is gone. Of a record
+  exactly three fields are read, `accountUuid`, `organizationUuid` and
+  `emailAddress`, each taken only in the shape of one; 0.12.0 also took any
+  other key of the record that ended like one of them. Of one account's desktop
+  sessions the newest 200 records are read. `prepare` prints how many records it read
+  and how many were there and could not be used (not a regular file, over
+  64 MB, not JSON) — with a warning, since an address only such a record names
+  is not replaced — and never a value. The 0.12.0 review measured the desktop
+  account's address in the uploads of 15 terminal sessions, 348 times; on the
+  181 sessions scanned for this version, 0.12.0 left it 242 times in the files
+  of 12, and this version in none.
+- **Of a hook firing and of a message, only what is read is published.** A
+  hook attachment goes out with its fields only when its type has been measured
+  (`hook_success`, `hook_additional_context`, `hook_non_blocking_error`); any
+  other `hook_*` type keeps the firing's name, event and tool-use id — each
+  only where it is a short string — and nothing it printed, ran or injected:
+  0.12.0 published such a type with its `stdout` and `command`. Of `message`
+  only `role`, `content`, `id`, `type`, `model`, `stop_reason` and `usage` are
+  published; the rest of the API's answer envelope (`diagnostics`,
+  `context_management`, `stop_sequence`, …) stays, counted by name. A shape no
+  measured transcript had — a hook type, a `message` key, a content block type
+  — is listed under `unrecognised_shapes` and `prepare` adds a line `/share`
+  relays; a content block of an unknown type is the conversation and is
+  published as it is. None of the 181 sessions had one. Not covered: what is
+  inside a content block, inside `usage`, inside the other kept attachments
+  (`deferred_tools_delta`, `skill_listing`, `task_status`, …) and inside what a
+  kept `system` record reports — a key that is new there is published unsaid,
+  as in 0.12.0.
+- **The hook approves an upload only to the plugin's own server**: the host of
+  its MCP address on that address's port and, for the dedicated `share.` host,
+  the domain it is on — `share.elasticflow.app` and `elasticflow.app` on 443
+  unless `EF_SHARE_MCP_URL` names another server. 0.12.0 approved any
+  `*.elasticflow.app` host on any port. It also approves nothing — `prepare`
+  included — while the tool's work directory is inside the session's project,
+  whether `EF_SHARE_WORK_DIR` or `TMPDIR` put it there and under whatever name
+  the directory is given (a link, another letter case, the macOS data volume):
+  the directory's real parents are compared with the project, not their paths.
+  One layout is not judged: the temp folder below a session that is in the
+  home folder or above it — that is where the machine keeps it (under the home
+  folder on Windows), not a place a project named. So the steps ask for
+  permission when you start Claude Code in a project that holds the work
+  directory, or in the temp folder itself. A hook input that does not say
+  where the session is approves nothing. The tool itself still sends to any
+  ElasticFlow host you approve.
+- **A result file is sent only while it holds what was listed.** `prepare`
+  records a sha256 of the page and of each file it lists; `upload` compares
+  what it read with it — 0.12.0 compared the length — and the local server the
+  picture is taken from hands out a file only while it matches. A prepared
+  directory made by 0.12.0 has no digests: its results are refused with "run
+  prepare again".
+- **The picture's local server answers only a request that has its token.**
+  The files are served under a random token made for that one picture; a
+  request without it gets no file, no wrapper page and no cross-origin header.
+  In 0.12.0 any page open in your browser could read the result's files off
+  the port while the picture was taken. The token is part of the address on
+  the browser's command line: a program that can read that command line — your
+  own, which can read the files on disk anyway; another user's, where the
+  system shows it — can still use it for the seconds the capture runs. The
+  browser is started with `--disable-background-networking`.
+- **The copy of a session is written only into a directory that is yours.**
+  The default directory is made by `mkdtemp`; an `--out` directory that exists
+  must be your own before anything in it is touched, and is refused if it is
+  not closed to other users after `prepare` closed it — 0.12.0 took an empty
+  directory someone else had made in a shared temp folder and ignored a failed
+  `chmod`. The cleanup of browser profiles a killed run left removes only a
+  directory of your own that is such a profile — it holds the plugin's marker,
+  or is one 0.12.0 left (the name `mkdtemp` gave it and the browser's
+  `Local State` file), or holds nothing at all — no longer any
+  `ef-share-preview-*` directory.
+
+### Fixed
+- An id named only by a sub-agent's meta file or a workflow run's record was
+  learnt after the main transcript and the earlier sub-agents were written, so
+  it stayed in them. Every such file is read in the first pass now, the run
+  records whole.
+- A sub-agent's description (500 characters), a workflow summary (600) and a
+  phase's title and detail were cut before identifiers were replaced: an id the
+  limit fell inside left its first characters behind. They are replaced first
+  and cut after.
+- A sub-agent record whose tool output was cut to fit the upload was written
+  with U+2028 / U+2029 raw again, which the server reads as a line break (1 of
+  181 measured sessions). Line separators are escaped last, as each transcript
+  file is written.
+- A desktop-app folder was read for the account's ids only in lower case
+  (`Local-Agent-Mode-Sessions/<account>/<organisation>` was not).
+- The release runbook's mirroring `rsync --delete` excluded neither the Codex
+  plugin (`.agents/`, `share-codex/`) nor `share-antigravity/`: followed
+  literally it removed them from the public repository.
+- This file linked 0.5.0–0.7.0 to tags that never existed; they now link to
+  the commit that published each.
+
 ## [0.12.0] - 2026-11-20
 
 Brings the plugin up to date with Claude Code 2.1.281–2.1.325, in the terminal
@@ -267,12 +371,15 @@ Initial public release of the `ef-share` Claude Code plugin.
 - Published to the `elasticflowapp/plugins` marketplace; install with
   `claude plugin install ef-share@elasticflowapp`.
 
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.12.0...HEAD
+<!-- Releases are tagged in elasticflowapp/plugins from v0.8.0 on. 0.5.0–0.7.0 were published
+     before that: each links to the commit that published it (its share/ tree). -->
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.1
 [0.12.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.0
 [0.11.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.11.0
 [0.10.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.10.0
 [0.9.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.9.0
 [0.8.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.8.0
-[0.7.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.7.0
-[0.6.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.6.0
-[0.5.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.5.0
+[0.7.0]: https://github.com/elasticflowapp/plugins/tree/4094bb4cde32d3ad6b444da1c06a9ca840dd356b/share
+[0.6.0]: https://github.com/elasticflowapp/plugins/tree/54ea8d233f6a1c2b5e84713040908348abdec7fd/share
+[0.5.0]: https://github.com/elasticflowapp/plugins/tree/70718c58120ff0c54d786931dfb370fb418c2290/share

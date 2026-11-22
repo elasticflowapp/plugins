@@ -50,12 +50,17 @@ the conversation — the system prompt, the instruction files it loaded
 (`CLAUDE.md`, memory), your account email and organisation ids, the
 remote-control URL and the raw API requests. Where Claude Code copied an
 instruction file into one of its own messages, that copy is cut as well. The
-organisation id, account id and e-mail of the account the Claude Code you run
-`/share` in is signed in to, and the ids a session's own records and folders
-name, are replaced by a placeholder where they stand in what is published — a
-folder path, a command's output, the conversation itself. `/share` reads them
-from that Claude Code's own account record and prints none of them; it tells
-you how many records stayed, by kind, and how many places were cut or replaced.
+organisation id, account id and e-mail of the accounts every Claude app on this
+machine is signed in to — the Claude Code you run `/share` in, the terminal
+Claude Code, and the Claude desktop app, which can be signed in to a different
+account — and the ids a session's own records and folders name, are replaced by
+a placeholder where they stand in what is published — a folder path, a
+command's output, the conversation itself. `/share` reads them from those apps'
+own account records and prints none of them; it tells you how many records
+stayed, by kind, and how many places were cut or replaced. Of a hook firing of
+a kind this version has not seen only its name is published, and of a message
+only the fields that are read — not the rest of the API's answer around it;
+`/share` says so when it meets something new there.
 
 **What that does not cover:** text that is part of the conversation. If one of
 your hooks injects memory notes or rules into the session, that text is in the
@@ -63,10 +68,10 @@ session; `/share` tells you how many such injections there are, and you can
 redact them before publishing. The same goes for an instruction file that you
 or the agent opened or quoted during the session, and for a remote-control link
 that was typed into a command: they are conversation. So is the address of
-any other account — one you no longer use, or the one another Claude app on
-the same machine is signed in to — and an identifier written some other way
-than Claude Code records it (an id without its hyphens, an address spelt out):
-look through the redaction candidates `/share` shows.
+any other account — one you no longer use, or one no Claude app on this
+machine is signed in to now — and an identifier written some other way than
+Claude Code records it (an id without its hyphens, an address spelt out): look
+through the redaction candidates `/share` shows.
 
 On the first `/share` of a session Claude Code prompts you to authorize the
 ElasticFlow Share MCP via OAuth in your browser — approve once and you are set.

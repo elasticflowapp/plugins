@@ -19,6 +19,7 @@
 // is what the server will take.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { records } from "./transcript.js";
 import { RESULT_MIME, ENTRY_EXT, unpublishablePath, unpublishableEntry } from "./result-types.js";
 export const RESULT_LIMITS = {
@@ -178,15 +179,16 @@ function inside(root, p) {
     const rel = path.relative(root, p);
     return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
-function readText(p) {
+function readBytes(p) {
     try {
-        return fs.readFileSync(p, "utf-8");
+        return fs.readFileSync(p);
     }
     catch {
         return null;
     }
 }
-const nothing = (blocked, bytes = 0) => ({ bytes, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked });
+export const sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
+const nothing = (blocked, bytes = 0) => ({ bytes, sha256: null, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked });
 export function describeResult(entryPath) {
     const L = RESULT_LIMITS;
     let entryReal;
@@ -206,21 +208,26 @@ export function describeResult(entryPath) {
         return nothing(entryProblem, entryStat.size);
     if (entryStat.size > L.maxEntryBytes)
         return nothing(`the page is larger than ${Math.round(L.maxEntryBytes / 1048576)} MB`, entryStat.size);
+    // Each listed file is read ONCE here: its size, its digest and the references in it come
+    // from the same bytes. The digest is what "unchanged since listed" means at upload — a
+    // size alone is the same for any other content of that length.
+    const entryData = readBytes(entryReal);
+    if (entryData === null)
+        return nothing("the file could not be read", entryStat.size);
+    if (entryData.length > L.maxEntryBytes)
+        return nothing(`the page is larger than ${Math.round(L.maxEntryBytes / 1048576)} MB`, entryData.length);
     const root = path.dirname(entryReal);
     const assets = new Map();
     const skipped = new Map();
     const hosts = new Set();
-    let total = entryStat.size;
+    let total = entryData.length;
     const nameKey = (rel) => rel.normalize("NFC").toLowerCase();
     const taken = new Set([nameKey(path.basename(entryPath))]);
-    const queue = [{ file: entryReal, depth: 0 }];
+    const queue = [{ file: entryReal, depth: 0, text: entryData.toString("utf-8") }];
     const visited = new Set([entryReal]);
     while (queue.length > 0) {
-        const { file, depth } = queue.shift();
+        const { file, depth, text } = queue.shift();
         const ext = path.extname(file).toLowerCase();
-        const text = readText(file);
-        if (text === null)
-            continue;
         const refs = ENTRY_EXT.has(ext) ? refsInHtml(text) : ext === ".css" ? refsInCss(text) : (ext === ".js" || ext === ".mjs") ? refsInJs(text) : [];
         for (const raw of refs) {
             const ref = raw.trim();
@@ -301,16 +308,31 @@ export function describeResult(entryPath) {
                 skipped.set(ref, "its name differs from another published file only by letter case, or is also a folder");
                 continue;
             }
+            const data = readBytes(real);
+            if (data === null) {
+                skipped.set(ref, "could not be read");
+                continue;
+            }
+            // the file grew between the look at its size and the read: judged by what was read
+            if (data.length > L.maxAssetBytes) {
+                skipped.set(ref, `larger than ${Math.round(L.maxAssetBytes / 1048576)} MB`);
+                continue;
+            }
+            if (total + data.length > L.maxTotalBytes) {
+                skipped.set(ref, `the result would exceed ${Math.round(L.maxTotalBytes / 1048576)} MB`);
+                continue;
+            }
             taken.add(key);
             visited.add(real);
-            assets.set(real, { rel, abs: real, bytes: st.size });
-            total += st.size;
+            assets.set(real, { rel, abs: real, bytes: data.length, sha256: sha256Hex(data) });
+            total += data.length;
             if (depth + 1 < L.maxDepth && (aext === ".css" || aext === ".js" || aext === ".mjs"))
-                queue.push({ file: real, depth: depth + 1 });
+                queue.push({ file: real, depth: depth + 1, text: data.toString("utf-8") });
         }
     }
     return {
-        bytes: entryStat.size,
+        bytes: entryData.length,
+        sha256: sha256Hex(entryData),
         assets: [...assets.values()].sort((a, b) => a.rel.localeCompare(b.rel)),
         skipped: [...skipped.entries()].map(([ref, reason]) => ({ ref: ref.slice(0, 200), reason })).slice(0, 40),
         remote_hosts: [...hosts].sort().slice(0, 20),

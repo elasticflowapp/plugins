@@ -32,12 +32,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 import { prepareSession, summarizeManifest, isPreparedDir } from "../src/lib/prepare.js";
 import { uploadPrepared, parseResultSelection } from "../src/lib/upload.js";
 import { digestUpload } from "../src/lib/upload-digest.js";
+import { accountRecordSources } from "../src/lib/account-records.js";
 import { parseCommandArgs, flag, UsageError, USAGE } from "../src/lib/cli-args.js";
-import { PREPARED_NAME, preparedWorkDir, readPreparedJson, requirePreparedDir } from "../src/lib/prepared-dir.js";
+import { PREPARED_NAME, newPreparedDir, preparedWorkDir, readPreparedJson, requirePreparedDir } from "../src/lib/prepared-dir.js";
 function out(value) {
     process.stdout.write(JSON.stringify(value, null, 1) + "\n");
 }
@@ -46,10 +46,10 @@ const PREPARED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /**
  * A prepared directory is a copy of a session. Nothing else removes it, so each
  * prepare run clears the ones it left in its work directory more than a day
- * ago: directories with the name prepare gives them, that hold a prepare
- * manifest, and nothing else.
+ * ago: directories with the name prepare gives them, that are the person's own
+ * and hold a prepare manifest, and nothing else. `uid` is injected in tests.
  */
-export function sweepPreparedDirs(workDir, now = Date.now()) {
+export function sweepPreparedDirs(workDir, now = Date.now(), uid = typeof process.getuid === "function" ? process.getuid() : null) {
     let names;
     try {
         names = fs.readdirSync(workDir);
@@ -64,7 +64,12 @@ export function sweepPreparedDirs(workDir, now = Date.now()) {
         const dir = path.join(workDir, name);
         try {
             const st = fs.lstatSync(dir);
-            if (!st.isDirectory() || now - st.mtimeMs < PREPARED_MAX_AGE_MS || !isPreparedDir(dir))
+            if (!st.isDirectory() || now - st.mtimeMs < PREPARED_MAX_AGE_MS)
+                continue;
+            // in a shared temp folder a directory of this name can be someone else's: not ours to empty
+            if (process.platform !== "win32" && uid !== null && st.uid !== uid)
+                continue;
+            if (!isPreparedDir(dir))
                 continue;
             fs.rmSync(dir, { recursive: true, force: true });
             removed++;
@@ -82,16 +87,34 @@ async function cmdPrepare(args) {
     if (!fs.existsSync(transcript))
         throw new UsageError(`transcript not found: ${transcript}`);
     let outDir = flag(args, "out");
+    let made = null;
     if (!outDir) {
         const workDir = preparedWorkDir();
         sweepPreparedDirs(workDir);
-        const sid = crypto.createHash("sha256").update(path.resolve(transcript)).digest("hex").slice(0, 8);
-        outDir = path.join(workDir, `ef-share-${sid}-${crypto.randomBytes(3).toString("hex")}`);
+        // made here and now, by mkdtemp: never a name computed first and taken if it happens to be there
+        outDir = made = newPreparedDir(workDir, transcript);
     }
-    // Claude Code's own record of the account this machine is signed in to: its ids are
-    // replaced wherever they stand in what is published (sanitize.ts, takeAccountFields).
-    const accountFile = path.join(process.env.CLAUDE_CONFIG_DIR || os.homedir(), ".claude.json");
-    const manifest = await prepareSession({ transcriptPath: transcript, outDir, extraResults: args.flags.get("result") ?? [], accountFile });
+    // The Claude apps' own records of the accounts this machine is signed in to — Claude
+    // Code's, and the desktop app's, which can be another account: their ids are replaced
+    // wherever they stand in what is published (src/lib/account-records.ts).
+    const accounts = accountRecordSources(process.env, os.homedir());
+    let manifest;
+    try {
+        manifest = await prepareSession({
+            transcriptPath: transcript, outDir, extraResults: args.flags.get("result") ?? [],
+            accountFiles: accounts.files, desktopSessionsDirs: accounts.desktopSessionsDirs,
+        });
+    }
+    catch (e) {
+        // a run that failed before it wrote anything leaves no directory behind (rmdir takes an empty one only)
+        if (made) {
+            try {
+                fs.rmdirSync(made);
+            }
+            catch { /* it holds something: the next sweep's */ }
+        }
+        throw e;
+    }
     out(summarizeManifest(manifest));
 }
 function cmdShow(args) {

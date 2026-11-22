@@ -12,6 +12,18 @@
 //     apply (viewer/lib/results/headers.ts). A file:// page would be a
 //     different page: module scripts and fetch do not load from file://, and a
 //     reference to a file that is not published would resolve;
+//   - that server answers only a request that carries its token — a random
+//     first path segment made for this one picture. The framed page has no
+//     origin of its own, so its files must be readable across origins
+//     (`Access-Control-Allow-Origin: *`); without the token any page open in the
+//     person's own browser, and any program that found the port, could read the
+//     result's files while the picture was being taken (release review
+//     2026-11-20, note 8). What the token does NOT close: it is part of the
+//     address on the browser's command line, so a program that can read that
+//     command line — any of the person's own, which can read the files on disk
+//     anyway; another user's, where the system shows it — has it for the seconds
+//     the capture runs (review of 0.12.1, R1-5). A file is handed out only while
+//     it still holds what prepare listed (its digest; note 9);
 //   - the browser is pointed at a WRAPPER page that holds the result in a
 //     sandboxed frame, the way the session page does, and that wrapper allows
 //     the frame this local origin only (`frame-src`). A result page that
@@ -34,6 +46,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { RESULT_MIME } from "./result-types.js";
 import { isFlatPng, trimPngBottom } from "./png.js";
@@ -64,6 +77,10 @@ export const PREVIEW = {
 export const RESULT_SANDBOX = "allow-scripts allow-pointer-lock";
 /** The wrapper page's path on the local server. `!` cannot be in a result file's name, so it never collides with one. */
 export const FRAME_PATH = "!frame.html";
+/** The file a capture puts into the browser profile it makes, so that a later run can tell the profile is one of its own. */
+export const PROFILE_MARKER = ".ef-share-preview";
+/** The name mkdtemp gave a profile: the prefix and six letters or digits. */
+const LEGACY_PROFILE_NAME = /^ef-share-preview-[A-Za-z0-9]{6}$/;
 const MAC_APPS = [
     ["Google Chrome.app", "Google Chrome"],
     ["Chromium.app", "Chromium"],
@@ -143,35 +160,46 @@ export function previewPolicy(origin, remoteHosts) {
     const sources = ["'self'", origin, ...declared, "data:", "blob:", "'unsafe-inline'", "'unsafe-eval'"].join(" ");
     return [`sandbox ${RESULT_SANDBOX}`, `default-src ${sources}`, "object-src 'none'", "base-uri 'none'", "form-action 'none'"].join("; ");
 }
-/** The wrapper: one sandboxed frame holding the entry page, filling the window. */
-export function framePage(entry) {
+/** The wrapper: one sandboxed frame holding the entry page, filling the window. `prefix`: the path the files are served under. */
+export function framePage(entry, prefix = "") {
     // encodeURIComponent leaves nothing that could end a double-quoted attribute
-    const src = "/" + entry.split("/").map(encodeURIComponent).join("/");
+    const src = prefix + "/" + entry.split("/").map(encodeURIComponent).join("/");
     return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Result preview</title>" +
         "<style>html,body{margin:0;height:100%;background:#fff;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style></head>" +
         `<body><iframe src="${src}" sandbox="${RESULT_SANDBOX}" referrerpolicy="no-referrer" allow=""></iframe></body></html>`;
 }
 /**
- * Serve exactly `files` on a loopback port, as the site will serve them: a
- * request for anything else is 404. With `entry`, the wrapper page is served at
- * FRAME_PATH. Returns the origin and a function to stop.
+ * Serve exactly `files` on a loopback port, as the site will serve them, under
+ * a token of this server's own: `<origin>/<token>/<file>`. A request for
+ * anything else — a file that is not published, any path without the token — is
+ * 404, with no header that would let another origin read the answer. With
+ * `entry`, the wrapper page is served at `<token>/FRAME_PATH`. Returns the
+ * origin, `base` (the origin with the token: what the files are under) and a
+ * function to stop.
  */
 export async function serveResultFiles(files, remoteHosts, entry) {
-    const byRel = new Map(files.map((f) => [f.rel.normalize("NFC"), f.abs]));
+    const byRel = new Map(files.map((f) => [f.rel.normalize("NFC"), f]));
+    const token = crypto.randomBytes(16).toString("hex");
     let origin = "";
     const notFound = (res) => { res.writeHead(404, { "Content-Type": "text/plain" }); res.end("Not found"); };
     const server = http.createServer((req, res) => {
-        let rel;
+        let asked;
         try {
-            rel = decodeURIComponent((req.url ?? "/").split(/[?#]/)[0]).replace(/^\/+/, "").normalize("NFC");
+            asked = decodeURIComponent((req.url ?? "/").split(/[?#]/)[0]).replace(/^\/+/, "").normalize("NFC");
         }
         catch {
-            rel = "";
+            asked = "";
         }
         if (req.method !== "GET" && req.method !== "HEAD") {
             notFound(res);
             return;
         }
+        // the token first: whoever does not have it learns nothing, not even which files there are
+        if (!asked.startsWith(token + "/")) {
+            notFound(res);
+            return;
+        }
+        const rel = asked.slice(token.length + 1);
         if (entry !== undefined && rel === FRAME_PATH) {
             res.writeHead(200, {
                 "Content-Type": "text/html; charset=utf-8",
@@ -181,19 +209,24 @@ export async function serveResultFiles(files, remoteHosts, entry) {
                 "Referrer-Policy": "no-referrer",
                 "Cache-Control": "no-store",
             });
-            res.end(req.method === "HEAD" ? undefined : framePage(entry));
+            res.end(req.method === "HEAD" ? undefined : framePage(entry, `/${token}`));
             return;
         }
-        const abs = byRel.get(rel);
-        if (!abs) {
+        const file = byRel.get(rel);
+        if (!file) {
             notFound(res);
             return;
         }
         let data;
         try {
-            data = fs.readFileSync(abs);
+            data = fs.readFileSync(file.abs);
         }
         catch {
+            notFound(res);
+            return;
+        }
+        // the picture is of the files that were listed, or of nothing: a file changed since is not handed out
+        if (file.sha256 !== undefined && crypto.createHash("sha256").update(data).digest("hex") !== file.sha256) {
             notFound(res);
             return;
         }
@@ -211,7 +244,7 @@ export async function serveResultFiles(files, remoteHosts, entry) {
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const address = server.address();
     origin = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    return { origin, close: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); }) };
+    return { origin, base: `${origin}/${token}`, close: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); }) };
 }
 const live = new Set();
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -296,8 +329,16 @@ function unwatch(c) {
  * A run that is killed outright (SIGKILL) cannot clean up: its browser is ended by the reaper
  * (startReaper), but the profile directory stays. The next capture removes those left for
  * over an hour — never a younger one, which may belong to a capture running now.
+ *
+ * Only what a capture of this tool left: a directory of that name which is the person's own
+ * and holds the marker a capture writes into its profile (PROFILE_MARKER, a plain file) — or
+ * holds nothing at all, which is removed as an empty directory is. 0.12.0 wrote no marker: a
+ * profile it left is known by the name mkdtemp gave it and the browser's own `Local State`
+ * file in it (review of 0.12.1, R1-10). Until 0.12.1 any `ef-share-preview-*` directory was
+ * emptied unseen, in a temp folder that can be shared (release review 2026-11-20, note 7).
+ * `uid` is injected in tests.
  */
-export function sweepStaleProfiles(tmp = os.tmpdir(), now = Date.now()) {
+export function sweepStaleProfiles(tmp = os.tmpdir(), now = Date.now(), uid = typeof process.getuid === "function" ? process.getuid() : null) {
     let removed = 0;
     let names;
     try {
@@ -314,7 +355,23 @@ export function sweepStaleProfiles(tmp = os.tmpdir(), now = Date.now()) {
             const st = fs.lstatSync(dir);
             if (!st.isDirectory() || now - st.mtimeMs < 3_600_000)
                 continue;
-            fs.rmSync(dir, { recursive: true, force: true });
+            if (process.platform !== "win32" && uid !== null && st.uid !== uid)
+                continue;
+            if (fs.readdirSync(dir).length === 0) {
+                fs.rmdirSync(dir);
+            }
+            else {
+                const plainFile = (file) => { try {
+                    return fs.lstatSync(path.join(dir, file)).isFile();
+                }
+                catch {
+                    return false;
+                } };
+                const ours = plainFile(PROFILE_MARKER) || (LEGACY_PROFILE_NAME.test(name) && plainFile("Local State"));
+                if (!ours)
+                    continue;
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
             removed++;
         }
         catch { /* gone, or not ours to remove */ }
@@ -373,6 +430,7 @@ export async function captureResultPreview(opts) {
     try {
         sweepStaleProfiles();
         capture.profile = fs.mkdtempSync(path.join(os.tmpdir(), "ef-share-preview-"));
+        fs.writeFileSync(path.join(capture.profile, PROFILE_MARKER), "", { mode: 0o600 }); // ours: sweepStaleProfiles looks for it
         watch(capture);
         served = await serveResultFiles(opts.files, opts.remoteHosts, opts.entry);
         fs.mkdirSync(path.dirname(opts.outFile), { recursive: true, mode: 0o700 });
@@ -391,10 +449,13 @@ export async function captureResultPreview(opts) {
             "--blink-settings=preferredColorScheme=1",
             "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
             "--disable-extensions", "--disable-sync", "--disable-component-update",
+            // the browser is here to load one local page: none of the services it runs for itself in the
+            // background (update and safe-browsing checks, metrics, hints) has a request to make
+            "--disable-background-networking",
             `--user-data-dir=${capture.profile}`, `--window-size=${PREVIEW.width},${PREVIEW.height}`,
             `--virtual-time-budget=${PREVIEW.settleMs}`, `--timeout=${PREVIEW.stopLoadingMs}`, `--screenshot=${opts.outFile}`,
         ];
-        const url = `${served.origin}/${encodeURIComponent(FRAME_PATH)}`;
+        const url = `${served.base}/${encodeURIComponent(FRAME_PATH)}`;
         // "new" headless is the one current browsers ship. An old one only knows the plain flag and
         // exits at once without a file — only then is the plain flag tried, and never after a timeout:
         // one limit covers every attempt.

@@ -160,6 +160,9 @@ function checkedResultFile(root, rel, abs) {
     const unpublishable = unpublishablePath(rel);
     return unpublishable ? { problem: `${rel}: ${unpublishable}` } : { real };
 }
+/** A sha256 as prepare records it. */
+const DIGEST = /^[0-9a-f]{64}$/;
+const noDigest = (rel) => `the list of results records no digest of ${rel} (it was made by an older ef-share)`;
 /**
  * The files of one listed result, each checked again by the rules prepare
  * listed it by (results.ts describeResult): the page is the file the list
@@ -167,6 +170,12 @@ function checkedResultFile(root, rel, abs) {
  * the server takes; each one is a regular file, the size it was when listed,
  * within the limits of one result. The paths returned are the real ones that
  * were checked — what is read, and what a preview picture is taken of.
+ *
+ * Each comes with the digest prepare recorded. The size says only that a file
+ * is as long as it was; whoever reads the file — the upload, the local server
+ * the picture is taken from — compares what it read with the digest, and a file
+ * that holds something else is not sent or served (release review 2026-11-20,
+ * note 9).
  */
 function resultFiles(r) {
     const L = RESULT_LIMITS;
@@ -194,7 +203,8 @@ function resultFiles(r) {
     if (r.assets.length > L.maxAssets)
         return fail(`it lists more than ${L.maxAssets} files — one result carries at most ${L.maxAssets}`);
     const root = path.dirname(real);
-    const files = [{ rel: r.entry, abs: real, bytes: st.size }];
+    // the digests are read off the list as they stand and judged once every file has been looked at (below)
+    const files = [{ rel: r.entry, abs: real, bytes: st.size, sha256: r.sha256 }];
     let total = st.size;
     for (const a of r.assets) {
         if (!a || typeof a.rel !== "string" || typeof a.abs !== "string" || typeof a.bytes !== "number")
@@ -218,8 +228,12 @@ function resultFiles(r) {
         total += ast.size;
         if (total > L.maxTotalBytes)
             return fail(`the result is larger than ${Math.round(L.maxTotalBytes / MB)} MB`);
-        files.push({ rel: a.rel, abs: at.real, bytes: ast.size });
+        files.push({ rel: a.rel, abs: at.real, bytes: ast.size, sha256: a.sha256 });
     }
+    // asked last: every refusal above says more about what is wrong with a file than that its digest is missing
+    for (const f of files)
+        if (typeof f.sha256 !== "string" || !DIGEST.test(f.sha256))
+            return fail(noDigest(f.rel));
     return { files, problem: null };
 }
 export function buildUploadPlan(dir, resultIds, opts = {}) {
@@ -328,13 +342,15 @@ export function buildUploadPlan(dir, resultIds, opts = {}) {
                     problem = `${f.rel} could not be read: ${e.message}`;
                     break;
                 }
-                if (buf.length !== f.bytes) {
+                // the bytes that are sent are the bytes that were listed: the same length is not the same file
+                const digest = crypto.createHash("sha256").update(buf).digest("hex");
+                if (buf.length !== f.bytes || digest !== f.sha256) {
                     problem = `${f.rel} changed since the results were listed`;
                     break;
                 }
                 const part = `result.${id}.${files.length}`;
                 staged.push({ part, blob: new Blob([buf], { type: mimeFor(f.rel) }), filename: path.basename(f.rel) });
-                files.push({ part, rel: f.rel, bytes: buf.length, sha256: crypto.createHash("sha256").update(buf).digest("hex") });
+                files.push({ part, rel: f.rel, bytes: buf.length, sha256: digest });
                 bytes += buf.length;
             }
             if (problem) {
@@ -457,7 +473,8 @@ export async function takeResultPreviews(dir, resultIds, capture = captureResult
         try {
             outcome = await capture({
                 entry: r.entry,
-                files: listed.files.map((f) => ({ rel: f.rel, abs: f.abs })),
+                // with each file's digest: the local server hands the browser the listed bytes or nothing
+                files: listed.files.map((f) => ({ rel: f.rel, abs: f.abs, sha256: f.sha256 })),
                 remoteHosts: r.remote_hosts,
                 outFile: path.join(dir, "previews", `${r.id}.png`),
                 timeoutMs: Math.min(PREVIEW.timeoutMs, left),

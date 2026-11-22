@@ -17,18 +17,34 @@
 // them is something a reader of a shared session needs, and the server drops
 // every one of them at ingest. So they never leave the machine.
 //
-// The filter is an ALLOWLIST at three levels, because the format is internal to
+// The filter is an ALLOWLIST at four levels, because the format is internal to
 // Claude Code and changes between releases — something new must be looked at
 // before it is published, never published because nobody had heard of it:
 //
 //   1. the record KIND   — top-level type, `system` subtype, attachment type
 //   2. the record FIELDS — the envelope keys of a kept record
-//   3. inside a hook attachment — only the fields of the firing that are read
-//      (its name, event, command, exit code, duration and what it injected);
-//      `stderr` and anything else is left behind
+//   3. inside a hook attachment — per MEASURED type of firing, only the fields
+//      that are read (its name, event, command, exit code, duration and what it
+//      injected); `stderr` and anything else is left behind. A `hook_*` type
+//      nobody has measured keeps the firing's name, event and tool-use id — each
+//      only where it is a short string — and nothing it carried (HOOK_SHAPES,
+//      HOOK_IDENTITY_FIELDS)
+//   4. inside `message` — only the keys that are read (MESSAGE_FIELDS); the rest
+//      of the API's answer envelope is left behind
+//
+// NOT covered by a list of their own, and published whole as far as the levels
+// above keep them: what is inside `message.content` (a content block's keys),
+// inside `usage`, inside a kept attachment other than a hook firing
+// (`deferred_tools_delta`, `skill_listing`, `invoked_skills`, `task_status` …),
+// inside the sub-agent summary of `toolUseResult`, and inside the objects a kept
+// `system` record reports (`hookInfos`, `hookErrors`, `compactMetadata`). A key
+// that is new there goes out unsaid (review of 0.12.1, R1-6).
 //
 // Whatever is left behind is counted by name (`dropped_by_kind`,
-// `fields_dropped`), so the publisher can be shown it.
+// `fields_dropped`), so the publisher can be shown it. A shape no measured
+// transcript had — a hook type, a `message` key, a content block type — is also
+// counted in `unrecognised`, and prepare says so in a line of its own: it is the
+// sign that this list needs a look (release review 2026-11-20, note 6).
 //
 // Two things are taken out of the CONTENT of kept records, because Claude Code
 // repeats there what the dropped records hold (release review 2026-11-20):
@@ -68,16 +84,19 @@
 // redaction scan covers them. Likewise an e-mail address or a path the person
 // or the model wrote into the conversation is published, unless it is one of
 // the account's own identifiers found above. A kept attachment (`invoked_skills`,
-// `skill_listing`, `deferred_tools_delta` …) goes out whole, minus those.
+// `skill_listing`, `deferred_tools_delta` …) goes out whole, minus those, and so
+// does `message.content`: a content block is the conversation, whatever its type
+// — one of a type no measured transcript had is published as it is and counted
+// in `unrecognised`.
 //
 // Kept records are re-serialised. The values of `uuid`, `parentUuid`,
 // `sessionId`, `agentId`, `timestamp` and the request, message and tool-use ids
 // are never edited, so chapter, automation and hidden-record refs resolve
 // against the uploaded file exactly as they do against the original. `message`
-// is edited only where described above: thinking signatures are removed, an
-// isMeta record loses its instruction blocks, the account's identifiers are
-// replaced. The BYTES of a line may differ from the original's (JSON escapes,
-// number formatting).
+// is edited only where described above: the keys nothing reads and thinking
+// signatures are removed, an isMeta record loses its instruction blocks, the
+// account's identifiers are replaced. The BYTES of a line may differ from the
+// original's (JSON escapes, number formatting).
 /**
  * Top-level record types that carry the session a reader sees. `cost-state`
  * (what the session cost its author) is deliberately not one of them.
@@ -173,6 +192,41 @@ const AGENT_RESULT_FIELDS = [
  */
 const HOOK_FIELDS = new Set(["type", "hookName", "hookEvent", "toolUseID", "command", "exitCode", "durationMs", "stdout"]);
 const HOOK_CONTEXT_FIELDS = new Set(["type", "hookName", "hookEvent", "toolUseID", "content"]);
+/**
+ * The hook attachment types that have been looked at, each with the fields that
+ * are published (measured 2026-11-21 on 361 transcripts, Claude Code
+ * 2.1.271–2.1.326: `hook_success` ×21,566, `hook_additional_context` ×331,
+ * `hook_non_blocking_error` ×133 — and no other `hook_*` type).
+ */
+const HOOK_SHAPES = new Map([
+    ["hook_success", HOOK_FIELDS],
+    ["hook_non_blocking_error", HOOK_FIELDS],
+    ["hook_additional_context", HOOK_CONTEXT_FIELDS],
+]);
+/**
+ * What is published of a `hook_*` attachment whose type is not in HOOK_SHAPES:
+ * that a hook fired, which one and at which call — the Automations panel anchors
+ * on it. Nothing it printed, ran or injected: until 0.12.1 any such type went out
+ * with its `stdout` and `command` (release review 2026-11-20, note 6).
+ */
+const HOOK_IDENTITY_FIELDS = new Set(["type", "hookName", "hookEvent", "toolUseID"]);
+/** …and each of those only where it is what the measured types hold there: a short string (review of 0.12.1, R1-6). */
+const HOOK_IDENTITY_MAX = 200;
+/**
+ * Keys of `message` that are published: what the server reads (`model`,
+ * `stop_reason`, `content`, `usage` — viewer/lib/bundle/events.ts), who spoke, and
+ * the message's own id, which links records.
+ */
+const MESSAGE_FIELDS = new Set(["role", "content", "id", "type", "model", "stop_reason", "usage"]);
+/**
+ * Keys of `message` that are known and left behind: the rest of the API's answer
+ * envelope, which nothing reads (same measurement; `diagnostics`,
+ * `context_management` and `safeguard_results` are objects in some records). A key
+ * that is in neither list is left behind too, and counted in `unrecognised`.
+ */
+const MESSAGE_FIELDS_LEFT = new Set(["stop_sequence", "stop_details", "container", "context_management", "input_transformations", "diagnostics", "safeguard_results"]);
+/** Content block types of `message.content` that have been seen (same measurement). */
+const CONTENT_BLOCK_TYPES = new Set(["text", "thinking", "tool_use", "tool_result", "image"]);
 export const ACCOUNT_IDENTIFIER_KINDS = ["organisation_id", "account_id", "account_email"];
 /** What an identifier of the account becomes in a published record. */
 export const ACCOUNT_PLACEHOLDERS = {
@@ -380,14 +434,14 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
  */
 const SEP = String.raw `(?:\\{1,4}/?|/|-|%2[Ff]|%5[Cc])`;
 const DESKTOP_LAYOUTS = [
-    { marker: "scratch-workspaces", re: new RegExp(`scratch-workspaces${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["account_id", "organisation_id"] },
-    { marker: "skills-plugin", re: new RegExp(`skills-plugin${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["organisation_id", "account_id"] },
+    { re: new RegExp(`scratch-workspaces${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["account_id", "organisation_id"] },
+    { re: new RegExp(`skills-plugin${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["organisation_id", "account_id"] },
     // skills synced to the account: ~/.claude/skills/synced/<organisation>_<account>/<skill> — in 2 of 214
     // measured sessions the only place that named the account (review round 2, A2-1)
-    { marker: "synced", re: new RegExp(`synced${SEP}(${UUID})[_-](${UUID})`, "gi"), kinds: ["organisation_id", "account_id"] },
+    { re: new RegExp(`synced${SEP}(${UUID})[_-](${UUID})`, "gi"), kinds: ["organisation_id", "account_id"] },
     // where the desktop app keeps a session: …/Claude/local-agent-mode-sessions/<account>/<organisation>/local_<id>/…
     // — the cwd of every record; 6 of 9 measured desktop sessions had no record naming the ids (round 3, R3-1)
-    { marker: "local-agent-mode-sessions", re: new RegExp(`local-agent-mode-sessions${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["account_id", "organisation_id"] },
+    { re: new RegExp(`local-agent-mode-sessions${SEP}(${UUID})${SEP}(${UUID})`, "gi"), kinds: ["account_id", "organisation_id"] },
 ];
 const UUID_ONLY = new RegExp(`^${UUID}$`, "i");
 const EMAIL_ONLY = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
@@ -408,23 +462,46 @@ function takeIdentifier(into, kind, raw) {
 export function collectIdentifiersFromPaths(text, into) {
     scanDesktopLayouts(text, into);
 }
+/** One value known to be of `kind` — taken only when it has an identifier's shape (takeIdentifier). */
+export function takeAccountIdentifier(into, kind, value) {
+    if (typeof value === "string")
+        takeIdentifier(into, kind, value);
+}
+/** The three fields of a Claude app's account record, and what each is (key names measured 2026-11-20 on 2.1.281, 2026-11-21 on nine desktop records). */
+const ACCOUNT_RECORD_FIELDS = [
+    ["accountUuid", "account_id"],
+    ["organizationUuid", "organisation_id"],
+    ["emailAddress", "account_email"],
+];
 /**
- * The ids an object names by field — for Claude Code's own record of the account
- * it is signed in to (`oauthAccount` in its config file: `accountUuid`,
- * `organizationUuid`, `emailAddress`; key names measured 2026-11-20 on 2.1.281).
- * That record is the one source that does not depend on what a session happened to
- * write down: a terminal session records none of the three, and each new folder
- * layout would otherwise be one more pattern to learn (review round 3, R3-1, A2-2).
- * Anything that is not a plain object is ignored.
+ * The account a Claude app's own record names (`oauthAccount` in its config
+ * file). That record is the one source that does not depend on what a session
+ * happened to write down: a terminal session records none of the three, and each
+ * new folder layout would otherwise be one more pattern to learn (review round 3,
+ * R3-1, A2-2).
+ *
+ * Exactly three fields are read, by name — `accountUuid`, `organizationUuid`,
+ * `emailAddress` — each only when the whole value has an identifier's shape. No
+ * other key decides whose account this is: not a display or organisation name,
+ * and not a key that merely ends like one of the three (a billing contact's
+ * address, a parent organisation's id) — until 0.12.1 any such key was taken
+ * (review of 0.12.1, R1-4). Anything that is not a plain object is ignored.
  */
 export function takeAccountFields(o, into) {
-    if (o && typeof o === "object" && !Array.isArray(o))
-        takeFields(o, into);
+    if (!o || typeof o !== "object" || Array.isArray(o))
+        return;
+    for (const [key, kind] of ACCOUNT_RECORD_FIELDS) {
+        const value = o[key];
+        if (typeof value === "string")
+            takeIdentifier(into, kind, value.trim());
+    }
 }
+// The pattern is the only test. A cheaper one in front of it (`text.includes(<the folder's
+// name>)`) was case-sensitive where the pattern is not, so `Local-Agent-Mode-Sessions/<a>/<o>`
+// was never read (release review 2026-11-20, note 3) — and it bought nothing: over 50 MB the
+// four patterns take 9 ms, the four `includes` took 6.
 function scanDesktopLayouts(text, into) {
     for (const layout of DESKTOP_LAYOUTS) {
-        if (!text.includes(layout.marker))
-            continue;
         for (const m of text.matchAll(layout.re)) {
             takeIdentifier(into, layout.kinds[0], m[1]);
             takeIdentifier(into, layout.kinds[1], m[2]);
@@ -551,17 +628,80 @@ export function replaceAccountIdentifiers(value, ids, counts) {
         return value;
     return replaceIn(value, r, counts, []);
 }
+/**
+ * `message` with only the keys that are read. What is left behind is counted by
+ * name; a key or a content block type no measured transcript had is counted as
+ * unrecognised (the block itself stays: it is the conversation).
+ */
+function slimMessage(message, count) {
+    if (!message || typeof message !== "object" || Array.isArray(message))
+        return;
+    const m = message;
+    for (const k of Object.keys(m)) {
+        if (MESSAGE_FIELDS.has(k))
+            continue;
+        delete m[k];
+        count("fields_dropped", `message.${k}`);
+        if (!MESSAGE_FIELDS_LEFT.has(k))
+            count("unrecognised", `message.${k}`);
+    }
+    if (!Array.isArray(m["content"]))
+        return;
+    for (const part of m["content"]) {
+        const type = part && typeof part === "object" && !Array.isArray(part) ? part["type"] : undefined;
+        if (typeof type !== "string" || !CONTENT_BLOCK_TYPES.has(type))
+            count("unrecognised", `content:${typeof type === "string" ? type : "(no type)"}`);
+    }
+}
+/**
+ * `s` with every identifier replaced, THEN cut to `max` characters — for a text
+ * that is published up to a limit (a sub-agent's description, a workflow run's
+ * summary). Cut first, an id that the limit falls inside left its first characters
+ * behind, which nothing replaced (release review 2026-11-20, note 5). Counted are
+ * the replacements that are in what is published: the ones that start before the cut.
+ */
+export function replaceThenCut(s, max, ids, counts) {
+    const r = makeReplacer(ids);
+    if (!r)
+        return s.slice(0, max);
+    let grown = 0; // how much longer the text has become up to the current match
+    const replaced = s.replace(r.every, (m, offset) => {
+        const kind = r.kindOf.get(m.toLowerCase());
+        if (offset + grown < max)
+            counts[kind]++;
+        grown += ACCOUNT_PLACEHOLDERS[kind].length - m.length;
+        return ACCOUNT_PLACEHOLDERS[kind];
+    });
+    return replaced.slice(0, max);
+}
+/**
+ * JSON Lines with U+2028 and U+2029 written as escapes. They are legal inside a JSON
+ * string and Claude Code — and `JSON.stringify` — writes them as they are, but a line
+ * reader that follows the Unicode line breaks (the server's) ends a line at either:
+ * half a record, and the session cannot be published (review round 3, R3-2). In a
+ * transcript they occur only inside strings, so the escape is the same JSON. It is the
+ * LAST thing done to a transcript's text: whatever re-serialises a record afterwards
+ * brings the raw character back (release review 2026-11-20, note 2).
+ */
+export function escapeLineSeparators(jsonl) {
+    return /[\u2028\u2029]/.test(jsonl) ? jsonl.replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029") : jsonl;
+}
 /** The record as it may be published, or null when its kind is not published. */
 export function sanitizeRecord(rec, stats) {
     if (!isKeptRecord(rec))
         return null;
+    const count = (into, name) => {
+        const counts = stats?.[into];
+        if (counts)
+            counts[name] = (counts[name] ?? 0) + 1;
+    };
     for (const k of Object.keys(rec)) {
         if (KEEP_FIELDS.has(k))
             continue;
         delete rec[k];
-        if (stats)
-            stats.fields_dropped[k] = (stats.fields_dropped[k] ?? 0) + 1;
+        count("fields_dropped", k);
     }
+    slimMessage(rec["message"], count);
     if ("toolUseResult" in rec) {
         const slim = slimToolUseResult(rec["toolUseResult"]);
         if (slim === undefined)
@@ -576,17 +716,23 @@ export function sanitizeRecord(rec, stats) {
         stats.instruction_blocks_withheld += withheld;
     if (rec["type"] === "attachment") {
         const att = rec["attachment"];
-        if (String(att["type"]).startsWith("hook_")) {
+        const attType = String(att["type"]);
+        if (attType.startsWith("hook_")) {
             // What a hook printed to stderr is its own diagnostics: nothing reads it,
-            // and it is where tokens and paths end up. The firing itself is kept.
-            const keep = att["type"] === "hook_additional_context" ? HOOK_CONTEXT_FIELDS : HOOK_FIELDS;
+            // and it is where tokens and paths end up. The firing itself is kept — of a
+            // type nobody has measured, its name only.
+            const known = HOOK_SHAPES.get(attType);
+            if (!known)
+                count("unrecognised", `attachment:${attType}`);
+            const keep = known ?? HOOK_IDENTITY_FIELDS;
             for (const k of Object.keys(att)) {
-                if (keep.has(k))
+                // of a type nobody has measured, a name is published only where it IS a name: a short string
+                const asMeasured = known !== undefined || (typeof att[k] === "string" && att[k].length <= HOOK_IDENTITY_MAX);
+                if (keep.has(k) && asMeasured)
                     continue;
                 delete att[k];
                 // counted like an envelope field, under the firing's own name space
-                if (stats)
-                    stats.fields_dropped[`hook.${k}`] = (stats.fields_dropped[`hook.${k}`] ?? 0) + 1;
+                count("fields_dropped", `hook.${k}`);
             }
             if (stats && hasInjection(att))
                 stats.hook_injections++;
@@ -610,6 +756,7 @@ export function minimiseTranscript(jsonl, into = emptyAccountIdentifiers()) {
         records_dropped: 0,
         dropped_by_kind: {},
         fields_dropped: {},
+        unrecognised: {},
         hook_injections: 0,
         instruction_blocks_withheld: 0,
         account_identifiers_replaced: zeroAccountCounts(),
@@ -659,12 +806,7 @@ export function finishTranscript(m, ids) {
     const lines = replacer
         ? m.lines.map((line) => (replacer.inJson.test(line) ? JSON.stringify(replaceIn(JSON.parse(line), replacer, stats.account_identifiers_replaced, [])) : line))
         : m.lines;
-    // U+2028 and U+2029 are legal inside a JSON string and Claude Code writes them as they
-    // are, but a line reader that follows the Unicode line breaks (the server's) ends a
-    // line at either: half a record, and the session cannot be published (review round 3,
-    // R3-2). They occur only inside strings here, so the escape is the same JSON.
-    const joined = lines.length > 0 ? lines.join("\n") + "\n" : "";
-    const text = /[\u2028\u2029]/.test(joined) ? joined.replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029") : joined;
+    const text = escapeLineSeparators(lines.length > 0 ? lines.join("\n") + "\n" : "");
     stats.bytes_out = Buffer.byteLength(text);
     return { jsonl: text, stats };
 }

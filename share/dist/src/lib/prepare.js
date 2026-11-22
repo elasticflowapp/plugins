@@ -21,9 +21,13 @@
 // directory, an empty one, or one an earlier prepare made.
 //
 // The account's identifiers (organisation and account ids, the e-mail) are
-// collected from the main transcript AND every sub-agent transcript before
-// anything is written, and replaced in every published record and in every JSON
-// part written beside them (sanitize.ts: minimiseTranscript, finishTranscript).
+// collected before anything is written — from the account records of the Claude
+// apps on this machine (account-records.ts), the main transcript, every
+// sub-agent transcript, every sub-agent's meta file and every workflow run's
+// record — and replaced in every published record and in every JSON part written
+// beside them (sanitize.ts: minimiseTranscript, finishTranscript). A text that is
+// published up to a limit is replaced first and cut after (replaceThenCut), and a
+// transcript's line separators are escaped last, as it is written.
 // Two readers see the text before that replacement, because they look for files
 // on disk and upload none of the paths they read: skill provenance (it walks up
 // from the session's working directories) and result discovery (it uploads a
@@ -34,8 +38,9 @@
 // Nothing here talks to the network.
 import fs from "node:fs";
 import path from "node:path";
-import { minimiseTranscript, finishTranscript, collectAccountIdentifiers, replaceAccountIdentifiers, takeAccountFields, collectIdentifiersFromPaths, emptyAccountIdentifiers, zeroAccountCounts, ACCOUNT_IDENTIFIER_KINDS, } from "./sanitize.js";
-import { listSubagentFiles, listWorkflowRuns } from "./session-files.js";
+import { minimiseTranscript, finishTranscript, collectAccountIdentifiers, replaceAccountIdentifiers, collectIdentifiersFromPaths, replaceThenCut, escapeLineSeparators, emptyAccountIdentifiers, zeroAccountCounts, ACCOUNT_IDENTIFIER_KINDS, } from "./sanitize.js";
+import { readAccountRecords, RECORD_MAX_BYTES, RECORDS_PER_ACCOUNT } from "./account-records.js";
+import { listSubagentFiles, readWorkflowRunRecords, describeWorkflowRun } from "./session-files.js";
 import { extractAutomationCandidates } from "./automations.js";
 import { extractChapterCandidates } from "./chapters.js";
 import { extractHiddenRecords } from "./hidden-records.js";
@@ -44,6 +49,7 @@ import { findResultCandidates } from "./results.js";
 import { records, readJson } from "./transcript.js";
 import { PLAIN_TRANSCRIPT_MAX, PART_OVERHEAD_BYTES, SERVER_LIMITS, uploadBudget, mb } from "./limits.js";
 import { UsageError } from "./cli-args.js";
+import { assertOwnPrivateDir } from "./prepared-dir.js";
 export const PREPARE_VERSION = 2;
 /** Sub-agent tool output is trimmed, in steps, only when the upload would not fit. */
 export const TRIM_STEPS = [0, 16000, 4000, 1000];
@@ -67,7 +73,11 @@ const TRIM_MARK = (more) => `\n… [${more.toLocaleString("en-US")} more charact
 function trimString(s, limit) {
     return s.length <= limit ? s : s.slice(0, limit) + TRIM_MARK(s.length - limit);
 }
-/** Cut every tool_result body of a transcript to `limit` characters. 0 = leave as is. */
+/**
+ * Cut every tool_result body of a transcript to `limit` characters. 0 = leave as is.
+ * A record that is cut is serialised again, which writes a line separator inside
+ * it raw — so the separators are escaped again on the way out.
+ */
 export function trimToolResults(jsonl, limit) {
     if (limit <= 0)
         return jsonl;
@@ -110,16 +120,17 @@ export function trimToolResults(jsonl, limit) {
         }
         out.push(changed ? JSON.stringify(r) : line);
     }
-    return out.length > 0 ? out.join("\n") + "\n" : "";
+    return escapeLineSeparators(out.length > 0 ? out.join("\n") + "\n" : "");
 }
 /** The fields of a sub-agent's meta file the server stores (viewer/lib/uploads/staged-upload.ts). Nothing else is sent. */
 const META_STRINGS = { agentType: 120, description: 500, toolUseId: 120, workflowRunId: 80, requestShape: 40, model: 120, pickedEffortModel: 120, parentAgentId: 80 };
 const META_BOOLEANS = ["finished", "stoppedByUser"];
-export function slimSubagentMeta(meta) {
+/** `cut` brings a text to its limit: the plain cut, or prepare's replace-then-cut. */
+export function slimSubagentMeta(meta, cut = (text, max) => text.slice(0, max)) {
     const out = {};
     for (const [k, max] of Object.entries(META_STRINGS))
         if (typeof meta[k] === "string" && meta[k])
-            out[k] = meta[k].slice(0, max);
+            out[k] = cut(meta[k], max);
     for (const k of META_BOOLEANS)
         if (typeof meta[k] === "boolean")
             out[k] = meta[k];
@@ -154,8 +165,15 @@ function writePrivate(file, data) {
  * a directory that is new, empty, or its own — never among someone else's files
  * (review 2026-11-16, P-12: `--out <a project folder>` replaced that project's
  * manifest.json).
+ *
+ * And never in someone else's DIRECTORY: one that exists must be the person's own
+ * before anything in it is looked at or removed, and whatever stands at `dir` once
+ * prepare has made or closed it must be theirs and shut to everyone else — judged
+ * off the directory, not off a chmod that may have failed quietly (release review
+ * 2026-11-20, note 7: an empty directory someone else had made in a shared /tmp
+ * took the copy of the session, and stayed open to them).
  */
-function claimOutDir(dir) {
+function claimOutDir(dir, who) {
     let st = null;
     try {
         st = fs.lstatSync(dir);
@@ -166,6 +184,11 @@ function claimOutDir(dir) {
     if (st) {
         if (!st.isDirectory())
             throw new UsageError(`--out ${dir} is not a directory`);
+        if ((who.platform ?? process.platform) !== "win32") {
+            const uid = who.uid !== undefined ? who.uid : typeof process.getuid === "function" ? process.getuid() : null;
+            if (uid !== null && st.uid !== uid)
+                throw new UsageError(`${dir} belongs to another user — not writing a copy of the session into it`);
+        }
         if (fs.readdirSync(dir).length > 0) {
             if (!isPreparedDir(dir))
                 throw new UsageError(`${dir} is not empty and was not made by "ef-share-session prepare" — not writing into it`);
@@ -175,6 +198,17 @@ function claimOutDir(dir) {
         }
     }
     mkdirPrivate(dir);
+    assertOwnPrivateDir(dir, who);
+}
+/**
+ * A transcript file. Its line separators are escaped here, as the last thing done
+ * to the text, whatever was done to it before (sanitize.ts escapeLineSeparators).
+ * Returns the bytes written.
+ */
+function writeTranscript(file, jsonl) {
+    const text = escapeLineSeparators(jsonl);
+    writePrivate(file, text);
+    return Buffer.byteLength(text);
 }
 function writeJson(file, value) {
     const text = JSON.stringify(value);
@@ -201,29 +235,50 @@ export async function prepareSession(opts) {
     const source = path.resolve(opts.transcriptPath);
     const raw = fs.readFileSync(source, "utf-8");
     const facts = envelopeFacts(raw);
-    // First pass over every transcript of the session — the main one and each
-    // sub-agent's — before a byte of any of them is written: it minimises them and
-    // collects the account's identifiers from all of them, since a sub-agent
-    // repeats ids only the main transcript's dropped records name, and the other
-    // way round. The second pass (finishTranscript) replaces them.
+    // First pass over everything of the session that is published — the main
+    // transcript, each sub-agent's, each sub-agent's meta file, each workflow run's
+    // record — before a byte of any of it is written: it minimises the transcripts
+    // and collects the account's identifiers from all of them, since any one can
+    // repeat an id that only another names (a sub-agent the main transcript's dropped
+    // records; the main transcript a path in a sub-agent's meta file — release review
+    // 2026-11-20, note 4). The second pass (finishTranscript) replaces them.
     const accountIds = emptyAccountIdentifiers();
-    // The account this machine is signed in to, from Claude Code's own record of it — the
-    // one source that does not depend on what the session wrote down. Read for three
-    // values only; a file that is missing or is not what is expected names nothing.
-    if (opts.accountFile) {
-        const config = readJson(opts.accountFile);
-        if (config && typeof config === "object")
-            takeAccountFields(config["oauthAccount"], accountIds);
+    // The accounts the Claude apps on this machine are signed in to, from their own
+    // records — the one source that does not depend on what the session wrote down.
+    // Read for three values only; a file that is missing or is not what is expected
+    // names nothing.
+    const accountRecords = readAccountRecords({
+        files: [...(opts.accountFile ? [opts.accountFile] : []), ...(opts.accountFiles ?? [])],
+        desktopSessionsDirs: opts.desktopSessionsDirs ?? [],
+    }, accountIds);
+    if (accountRecords.records_unreadable > 0) {
+        const n = accountRecords.records_unreadable;
+        warnings.push(`${n} account record${n === 1 ? "" : "s"} of the Claude apps on this machine could not be read (not a regular file, over ${mb(RECORD_MAX_BYTES)}, or not JSON): ` +
+            `an e-mail address that only such a record names is not replaced — look for it among the redaction candidates`);
+    }
+    if (accountRecords.records_not_read > 0) {
+        const n = accountRecords.records_not_read;
+        warnings.push(`the desktop app has more than ${RECORDS_PER_ACCOUNT} session records under one account: ${n} older session record${n === 1 ? " was" : "s were"} not read. ` +
+            `That account's ids are known from its folder; an e-mail address that only an older record names is not replaced`);
     }
     const mainMin = minimiseTranscript(raw, accountIds);
     if (mainMin.stats.records_kept === 0)
         throw new UsageError(`no publishable records in ${source} — this is not a session transcript, or the session has not started yet`);
     const subDropped = {};
     const subFields = {};
+    const subUnrecognised = {};
     let subInjections = 0;
     const minimised = [];
     let notIncluded = 0;
     for (const f of listSubagentFiles(source)) {
+        // The meta's description is written by the model, like the transcript it describes; a
+        // path in it can be the only place that names an id (review round 3, R3-5) — read here,
+        // for every sub-agent on disk, so that the id is known to everything written after.
+        let meta = f.metaPath ? readJson(f.metaPath) : null;
+        if (meta && (typeof meta !== "object" || Array.isArray(meta)))
+            meta = null;
+        if (meta)
+            collectIdentifiersFromPaths(JSON.stringify(meta), accountIds);
         const text = readOrNull(f.jsonlPath);
         if (text === null) {
             notIncluded++;
@@ -238,13 +293,18 @@ export async function prepareSession(opts) {
         const m = minimiseTranscript(text, accountIds);
         mergeCounts(subDropped, m.stats.dropped_by_kind);
         mergeCounts(subFields, m.stats.fields_dropped);
+        mergeCounts(subUnrecognised, m.stats.unrecognised);
         subInjections += m.stats.hook_injections;
         if (m.stats.records_kept === 0) {
             notIncluded++;
             continue;
         }
-        minimised.push({ file: f, m });
+        minimised.push({ file: f, m, meta });
     }
+    // The workflow runs' own records, whole: what is published of a run is cut to a
+    // limit, and a path beyond the limit names an id all the same.
+    const runRecords = readWorkflowRunRecords(source);
+    collectIdentifiersFromPaths(JSON.stringify(runRecords.map((r) => r.raw)), accountIds);
     if (notIncluded > 0)
         warnings.push(`${notIncluded} sub-agent transcript(s) on disk were not prepared (empty, unreadable, or beyond ${MAX_SUBAGENTS})`);
     // Two readers keep the identifiers, because they look for files on disk by
@@ -264,29 +324,24 @@ export async function prepareSession(opts) {
     const main = finishTranscript(mainMin, accountIds);
     mainMin.lines = []; // the published text is all that is needed from here on
     const dir = path.resolve(opts.outDir);
-    claimOutDir(dir);
+    claimOutDir(dir, { uid: opts.uid });
     mkdirPrivate(path.join(dir, "authored"));
     const mainFile = path.join(dir, "session.jsonl");
-    writePrivate(mainFile, main.jsonl);
+    writeTranscript(mainFile, main.jsonl);
     // ── sub-agents ──────────────────────────────────────────────────────────
     let subWithheld = 0;
     const subReplaced = zeroAccountCounts();
     const prepared = [];
-    for (const { file: f, m } of minimised) {
+    // Replaced first, cut to the limit after: cut first, an id the limit falls inside
+    // left its first characters behind (release review 2026-11-20, note 5).
+    const cutInto = (counts) => (text, max) => replaceThenCut(text, max, accountIds, counts);
+    for (const { file: f, m, meta: read } of minimised) {
         const s = finishTranscript(m, accountIds);
         m.lines = [];
         subWithheld += s.stats.instruction_blocks_withheld;
         mergeCounts(subReplaced, s.stats.account_identifiers_replaced);
-        let meta = f.metaPath ? readJson(f.metaPath) : null;
-        if (meta && (typeof meta !== "object" || Array.isArray(meta)))
-            meta = null;
-        if (f.workflowRunId)
-            meta = { ...(meta ?? {}), workflowRunId: f.workflowRunId };
-        // the meta's description is written by the model, like the transcript it describes;
-        // a path in it can be the only place that names an id (review round 3, R3-5)
-        if (meta)
-            collectIdentifiersFromPaths(JSON.stringify(meta), accountIds);
-        const slim = meta ? replaceAccountIdentifiers(slimSubagentMeta(meta), accountIds, subReplaced) : null;
+        const meta = f.workflowRunId ? { ...(read ?? {}), workflowRunId: f.workflowRunId } : read;
+        const slim = meta ? slimSubagentMeta(meta, cutInto(subReplaced)) : null;
         prepared.push({
             jsonl: s.jsonl,
             meta: slim && Object.keys(slim).length > 0 ? JSON.stringify(slim) : null,
@@ -313,9 +368,8 @@ export async function prepareSession(opts) {
     catch (e) {
         warnings.push(`plugin provenance skipped: ${e.message}`);
     }
-    const workflowRuns = listWorkflowRuns(source);
-    collectIdentifiersFromPaths(JSON.stringify(workflowRuns), accountIds);
-    const workflows = replaceAccountIdentifiers(workflowRuns, accountIds, replacedElsewhere);
+    // the texts with a limit are replaced as they are cut; the second call reaches the fields that have none
+    const workflows = replaceAccountIdentifiers(runRecords.map((r) => describeWorkflowRun(r, cutInto(replacedElsewhere))), accountIds, replacedElsewhere);
     const ex = (name) => path.join(dir, "extract", `${name}.json`);
     const part = (bytes) => bytes + PART_OVERHEAD_BYTES;
     // Everything the upload sends besides the transcripts, at the size it is sent.
@@ -363,10 +417,8 @@ export async function prepareSession(opts) {
     const subDir = path.join(dir, "subagents");
     let subBytes = 0;
     for (const p of prepared) {
-        const text = trimToolResults(p.jsonl, trimmedTo);
-        p.item.bytes = Buffer.byteLength(text);
+        p.item.bytes = writeTranscript(path.join(subDir, `agent-${p.item.agent_id}.jsonl`), trimToolResults(p.jsonl, trimmedTo));
         subBytes += p.item.bytes;
-        writePrivate(path.join(subDir, `agent-${p.item.agent_id}.jsonl`), text);
         if (p.meta)
             writePrivate(path.join(subDir, `agent-${p.item.agent_id}.meta.json`), p.meta);
     }
@@ -387,6 +439,14 @@ export async function prepareSession(opts) {
     const results = findResultCandidates(resultSources, opts.extraResults ?? [], resultNotes);
     warnings.push(...resultNotes);
     writeJson(path.join(dir, "results.json"), results);
+    // A shape nobody has looked at is said out loud: /share relays every warning.
+    const unseen = { ...main.stats.unrecognised };
+    mergeCounts(unseen, subUnrecognised);
+    if (Object.keys(unseen).length > 0) {
+        warnings.push(`this version of ef-share has not seen ${Object.keys(unseen).length} shape(s) in this session's records: ${countedNames(unseen).join(", ")}. ` +
+            `A hook firing of an unknown type is published by name only and an unknown message field is left on this machine; ` +
+            `a content block of an unknown type is part of the conversation and is published as it is — look at the session before publishing it`);
+    }
     const manifest = {
         prepare_version: PREPARE_VERSION,
         dir,
@@ -404,6 +464,7 @@ export async function prepareSession(opts) {
             bytes: subBytes,
             dropped_by_kind: subDropped,
             fields_dropped: subFields,
+            unrecognised: subUnrecognised,
             hook_injections: subInjections,
             instruction_blocks_withheld: subWithheld,
             account_identifiers_replaced: subReplaced,
@@ -412,6 +473,8 @@ export async function prepareSession(opts) {
         },
         account_identifiers: {
             found: Object.fromEntries(ACCOUNT_IDENTIFIER_KINDS.map((k) => [k, accountIds[k].length])),
+            account_records_read: accountRecords.records_read,
+            account_records_unreadable: accountRecords.records_unreadable,
             replaced_elsewhere: replacedElsewhere,
         },
         workflows,
@@ -437,11 +500,15 @@ export async function prepareSession(opts) {
     writeJson(path.join(dir, "manifest.json"), manifest);
     return manifest;
 }
+/** `name ×count`, the most frequent first. */
+function countedNames(d) {
+    return Object.entries(d).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([kind, n]) => `${kind} ×${n}`);
+}
 /** What the publishing agent reads: enough to act on, small enough to keep in context. */
 export function summarizeManifest(m) {
     // EVERY kind that stays behind, not the most frequent few: the person is told
     // what does not leave, and "the system prompt" is one record among thousands.
-    const counted = (d) => Object.entries(d).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([kind, n]) => `${kind} ×${n}`);
+    const counted = countedNames;
     // upload compresses the main transcript when that is what makes the chosen results fit
     const room = Math.max(0, m.upload_budget_bytes - m.upload_floor_bytes);
     return {
@@ -453,6 +520,8 @@ export function summarizeManifest(m) {
             records_left_on_this_machine: m.transcript.stats.records_dropped,
             left_on_this_machine_by_kind: counted(m.transcript.stats.dropped_by_kind),
             record_fields_left_on_this_machine: Object.keys(m.transcript.stats.fields_dropped).sort(),
+            // shapes no measured transcript had: a hook type (published by name only), a message field (left here), a content block type (published as it is)
+            unrecognised_shapes: counted(m.transcript.stats.unrecognised ?? {}),
             // context your own hooks put into the session is part of what is published
             hook_injections_published: m.transcript.stats.hook_injections + m.subagents.hook_injections,
             // instruction files (CLAUDE.md, memory) Claude Code copied into a message of its own: cut, one marker line each
@@ -469,6 +538,7 @@ export function summarizeManifest(m) {
             // the same account for the sub-agent transcripts as for the main one
             left_on_this_machine_by_kind: counted(m.subagents.dropped_by_kind),
             record_fields_left_on_this_machine: Object.keys(m.subagents.fields_dropped).sort(),
+            unrecognised_shapes: counted(m.subagents.unrecognised ?? {}),
             instruction_blocks_withheld: m.subagents.instruction_blocks_withheld,
             account_identifiers_replaced: m.subagents.account_identifiers_replaced,
             by_type: Object.entries(m.subagents.items.reduce((acc, s) => {
@@ -477,7 +547,7 @@ export function summarizeManifest(m) {
                 return acc;
             }, {})).map(([type, n]) => `${type} ×${n}`),
         },
-        // how many distinct ids of the account were found (never the values), and what was replaced outside the transcripts
+        // how many distinct ids of this machine's accounts were found (never the values), how many account records were read, and what was replaced outside the transcripts
         account_identifiers: m.account_identifiers,
         // the plugins whose provenance is uploaded: only those the session refers to
         plugins: { sent: m.extract.plugins.count, sent_names: m.extract.plugins.sent, installed_not_sent: m.extract.plugins.not_sent.length },
