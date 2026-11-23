@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "share": {
+      "serverUrl": "https://share.elasticflow.app/mcp"
+    }
+  }
+}

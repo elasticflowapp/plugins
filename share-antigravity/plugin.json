@@ -1,0 +1,12 @@
+{
+  "name": "ef-share",
+  "displayName": "ElasticFlow Share",
+  "description": "Publish this Antigravity session to ElasticFlow Share: a readable page with the conversation, the commands and tools it used, and a link to pass on.",
+  "version": "0.1.0",
+  "author": { "name": "ElasticFlow", "url": "https://elasticflow.app" },
+  "homepage": "https://elasticflow.app/share/connect",
+  "repository": "https://github.com/elasticflowapp/plugins",
+  "license": "MIT",
+  "keywords": ["elasticflow", "share", "session", "publish", "mcp"],
+  "suggestedPrompts": ["Publish this session to ElasticFlow Share.", "Share this session as an unlisted link."]
+}
