@@ -150,6 +150,23 @@ export function snapshotConversationId(jsonl) {
 }
 
 /**
+ * The folder the session ran in, as the snapshot's first record says it — the
+ * folder `prepare` was run from, inside the conversation. A page the server
+ * names (ADR-0033) is listed only when it is a file inside it. A snapshot taken
+ * from a terminal says none: the transcript itself holds no folder.
+ */
+export function sessionFolders(jsonl) {
+  const first = jsonl.slice(0, jsonl.indexOf("\n") === -1 ? jsonl.length : jsonl.indexOf("\n"))
+  try {
+    const rec = JSON.parse(first)
+    const p = isObj(rec) && rec.type === "ef_share" && isObj(rec.payload) && rec.payload.event === "session" ? rec.payload : null
+    return p && typeof p.cwd === "string" && path.isAbsolute(p.cwd) ? [p.cwd] : []
+  } catch {
+    return []
+  }
+}
+
+/**
  * The record `prepare` appends to a snapshot taken from inside the session being
  * published: "the publish of this session starts here". It is how the server
  * knows that the last turn asked for the publish, and keeps that turn off the

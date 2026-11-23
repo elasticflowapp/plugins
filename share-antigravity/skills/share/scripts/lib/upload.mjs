@@ -35,18 +35,20 @@ function networkReason(e) {
 }
 
 /**
- * POST the snapshot as the `session.jsonl` form field. Returns the server's
- * answer, which must be the Antigravity-aware one (`runtime: "antigravity"`):
- * a server that does not read Antigravity transcripts would publish an empty one.
+ * POST the snapshot as the `session.jsonl` form field — or, given `parts`, the
+ * request `send-results` built: the snapshot and the results the person chose
+ * (results.mjs). Returns the server's answer, which must be the Antigravity-aware one
+ * (`runtime: "antigravity"`): a server that does not read Antigravity transcripts would
+ * otherwise publish an empty session.
  */
-export async function uploadSnapshot({ snapshotPath, url, ticket, fetchImpl = fetch }) {
+export async function uploadSnapshot({ snapshotPath, url, ticket, parts = null, fetchImpl = fetch }) {
   if (!isShareUploadUrl(url)) {
     throw new Error(`refusing to upload: ${url} is not an ElasticFlow Share upload address`)
   }
   if (!ticket) throw new Error("missing upload ticket (call share_begin first)")
-  const body = fs.readFileSync(snapshotPath)
   const form = new FormData()
-  form.append("session.jsonl", new Blob([body], { type: "application/jsonl" }), "session.jsonl")
+  if (parts) for (const p of parts) form.append(p.name, p.blob, p.filename)
+  else form.append("session.jsonl", new Blob([fs.readFileSync(snapshotPath)], { type: "application/jsonl" }), "session.jsonl")
   let res
   try {
     // A redirect is never followed: the address was checked, its target was not,
@@ -64,7 +66,9 @@ export async function uploadSnapshot({ snapshotPath, url, ticket, fetchImpl = fe
       res.status === 401
         ? " — the ticket is single-use and short-lived; call share_begin again for a fresh one"
         : res.status === 413
-          ? " — this session's record is larger than the server accepts in one upload"
+          ? parts
+            ? " — the upload is larger than the server accepts: publish fewer or smaller results"
+            : " — this session's record is larger than the server accepts in one upload"
           : ""
     throw new Error(`upload failed: HTTP ${res.status} ${text.slice(0, 300)}${hint}`)
   }
@@ -94,7 +98,9 @@ export async function uploadSnapshot({ snapshotPath, url, ticket, fetchImpl = fe
 export function groupCandidates(candidates) {
   const groups = new Map()
   for (const c of Array.isArray(candidates) ? candidates : []) {
-    if (c === null || typeof c !== "object") continue
+    if (c === null || typeof c !== "object" || Array.isArray(c)) continue
+    // a finding is told by three strings; an answer in which they are anything else is not a finding to act on
+    if (typeof c.severity !== "string" || typeof c.kind !== "string" || typeof c.text_preview !== "string") continue
     const key = `${c.severity}\u0000${c.kind}\u0000${c.text_preview}`
     let g = groups.get(key)
     if (!g) {
