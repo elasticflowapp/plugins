@@ -209,6 +209,31 @@ export function describeRollout(jsonl) {
   }
 }
 
+/**
+ * The folders the session ran in, as Codex's own bookkeeping says them: the
+ * `cwd` of `session_meta` and of every `turn_context`. A page the server names
+ * (ADR-0033) is listed only when it is a file inside one of them. Read from the
+ * bookkeeping records alone — never from the conversation.
+ */
+export function sessionFolders(jsonl) {
+  const folders = []
+  for (const line of jsonl.split("\n")) {
+    // cheap: only the two kinds of record that carry it are parsed
+    if (!line.includes('"session_meta"') && !line.includes('"turn_context"')) continue
+    let rec
+    try {
+      rec = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!isObj(rec) || (rec.type !== "session_meta" && rec.type !== "turn_context") || !isObj(rec.payload)) continue
+    const cwd = rec.payload.cwd
+    if (typeof cwd === "string" && path.isAbsolute(cwd) && !folders.includes(cwd)) folders.push(cwd)
+    if (folders.length >= 32) break
+  }
+  return folders
+}
+
 export function rolloutThreadId(jsonl) {
   for (const line of jsonl.split("\n")) {
     const s = line.trim()

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
+### Added
+- **Publish a page the session made, as a result a reader can run.** After the
+  session is uploaded, Codex lists the HTML pages the session wrote that are
+  still files in its folder — each with exactly the files it would publish, by
+  name: the page and the local files it loads from its own folder, never the
+  folder around it — and asks. A result is published only on your yes, given
+  after you have seen that list; publishing the session again without it takes
+  it down. A page that was not listed (one a script made, one outside the
+  session's folder) is listed when you name it.
+- A picture of each published page is taken on your machine, in the installed
+  Chrome, Edge, Chromium or Brave, and published with it: it is what a reader
+  sees before they press Run. You are told where the picture is before
+  anything is public, and a result can be published without one. A browser
+  does not start inside Codex's sandbox: the command that sends a result then
+  stops before sending and says so, and Codex asks you to approve running it
+  outside the sandbox — or you publish without a picture.
+- What a result may hold is checked on your machine by the server's own rules
+  (file types, names, sizes) before anything is sent, and each file is sent
+  only while it still holds what was listed — a file changed in between stops
+  the upload. Secrets found in a result's files are reported, not removed: a
+  result is published byte for byte.
+
+### Changed
+- Your yes is a yes to the list you were shown: every list has an id, a
+  result keeps its number however often the list is made again, and
+  `send-results` sends nothing when the list is no longer the one you
+  answered — after a page was added or a file changed.
+- The pages are named by the server, from the session's record — the plugin
+  still does not read the conversation. A name is used only when it is a file
+  inside the folder the session ran in; anything else is counted and
+  not opened.
+- Publishing a result sends the session's record a second time, together with
+  the chosen files, under a fresh ticket (`send-results`); the first upload is
+  left unpublished and is removed by the server.
+- `clean` also removes the list of results and the pictures kept beside the
+  snapshot.
+
 ## [0.2.1] - 2026-11-23
 
 ### Fixed

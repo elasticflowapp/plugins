@@ -39,13 +39,55 @@ $share
 ```
 
 Codex snapshots the session, uploads it, proposes a title, summary and tags,
-asks for the visibility (public, unlisted or private) and what to redact, and
-answers with the link. Publishing the same session again after more work
+asks for the visibility (public, unlisted or private), what to redact and —
+when the session made an HTML page — whether to publish it too, and answers
+with the link. Publishing the same session again after more work
 updates the same session under the same id; the link reads as the title of the
 latest publish, and an earlier link redirects to it.
 
-The upload is the one step that needs network access: with the default sandbox
-Codex asks you to approve that command.
+The upload needs network access: with the default sandbox Codex asks you to
+approve that command. An upload that carries a page is a command of its own
+(`send-results`), and Codex is told to ask you for it by itself, for that one
+run.
+
+## Publishing a page the session made
+
+When the session wrote an HTML page — a report, a demo, a small tool — it can be
+published with the session as a **result**: a reader sees a picture of the page
+at the top of the session and can run the page itself, in a sandboxed frame.
+
+After the session is uploaded, Codex lists the pages the session wrote that
+are still files in the folder the session ran in, each with **exactly the files it would
+publish, by name**: the page and the local files it loads from its own folder
+(scripts, styles, images, data) — never the folder around it — the hosts it
+loads from the network, and what it refers to that will not be published. Then
+it asks. Nothing of a page is sent before you say yes, and saying yes to the
+session is not saying yes to a result.
+
+- A result is published **byte for byte**: nothing in it can be redacted. If a
+  file holds what looks like a secret, you are told before it is published.
+- A picture of the page is taken on your machine — the page is opened once,
+  without a window, in your installed Chrome, Edge, Chromium or Brave — and
+  published with it. You are told where the picture is before anything is
+  public. No such browser, or `EF_SHARE_PREVIEW=off`: the result is published
+  without a picture.
+- A browser does not start inside Codex's sandbox. The command that sends a
+  result then stops before sending anything and says so: Codex asks you to
+  approve running it outside the sandbox, or you publish without a picture.
+- A page that is not listed — one a script made, one outside the folder the session ran in — is
+  listed when you name it. A page that is a symbolic link is not published.
+- A private session shows its results to no one. Publishing the session again
+  without a result takes that result down.
+- Up to 12 results in one publish; a page at most 8 MB, a result at most 20 MB
+  and 81 files.
+
+The pages are named by the server, from the session's record: the plugin does
+not read the conversation. A name from the server is used only when it is a
+file inside the folder the session ran in — and not in a hidden or a
+dependency folder there (`node_modules`); anything else is counted and never
+opened. Your yes is a yes to the list you were shown: if the list changes
+before the files are sent — a page is added, a file is edited — nothing is
+sent until you have seen the new one.
 
 ## What is uploaded
 
