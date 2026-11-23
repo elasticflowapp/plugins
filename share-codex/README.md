@@ -53,14 +53,19 @@ The session's record as Codex wrote it on your machine (the rollout file). That
 is the conversation — your messages, the agent's messages, the commands and tool calls **with everything they
 printed**, the model name and token counts — and, with it, Codex's bookkeeping
 around the conversation: the model-facing copy of each step, the copy of your
-`AGENTS.md` and the environment description it injects, encrypted reasoning.
+`AGENTS.md` and the environment description it injects, its record of your
+settings (the commands you have approved among them), encrypted reasoning.
 
 Three things are taken out before the upload and stay on your machine: Codex's
 own instructions to the model (its base instructions and developer messages,
-the tool catalogue among them), your Codex account ids, and your usage limits.
+the tool catalogue and the skills listing — also where Codex's record of its
+state repeats them), your Codex account ids, and your usage limits. A tool
+description the session itself printed — the output of a tool search the agent
+ran — is part of the conversation, like any other output.
 
-What is published is chosen on the server: the conversation, the skills that
-were loaded, the model and the token counts. The rest of the upload is read past
+What is published is chosen on the server: the conversation, the agent's
+reasoning summaries where Codex recorded one, the skills that were loaded, the
+model and the token counts. The rest of the upload is read past
 — it is not kept and not shown. If a command printed a secret or the contents of
 a private file, that output is part of the conversation. A step of a kind the
 server does not know shows on the page as a step without content.

@@ -21,6 +21,14 @@
 // model, the permissions and the collaboration mode in `world_state`;
 // `token_count.rate_limits` (the plan among them). They are removed by KIND of
 // field wherever Codex's bookkeeping holds one, not at those paths only.
+//
+// Codex keeps a second copy of what it tells the model in its state record, under
+// names that do not say "instructions" — measured on 24 real rollouts of Codex
+// 0.167–0.171 (2026-11-23), after 0.2.0 had uploaded them: `world_state.state.tools`
+// and `.top_level_tools` (the tool catalogue: every tool's name with its
+// description) and `.host_skills` (`body`: the text of the skills listing Codex
+// hands the model). They stay here too. The recordings the first measurement was
+// checked against had their state blanked, which is how these were missed.
 
 import fs from "node:fs"
 import os from "node:os"
@@ -75,6 +83,8 @@ export function findRollout(threadId, home = codexHome()) {
 const INSTRUCTING_ROLE = new Set(["developer", "system"])
 /** A field that holds instructions for the model, whatever it is called (`base_instructions`, `developer_instructions`, `instructions` …). */
 const INSTRUCTIONS_KEY = /instructions/i
+/** A field of Codex's own state that is the tool catalogue or the skills listing it hands the model. */
+const CATALOGUE_KEY = /^(?:tools|top_level_tools|host_skills)$/
 /** A field that names the account: its ids, an address, its plan and limits. */
 const ACCOUNT_KEY = /(?:^|_)(?:user|account|org|organization|workspace)_id$|^(?:account|accountId|userId|auth)$|email|^rate_limits?$|plan_type/i
 
@@ -83,7 +93,8 @@ const instructs = (v) => isObj(v) && typeof v.role === "string" && INSTRUCTING_R
 
 /**
  * A value of Codex's bookkeeping without what stays on this machine: no field
- * of instructions, no account field, no instructing message — at any depth.
+ * of instructions, no tool catalogue or skills listing, no account field, no
+ * instructing message — at any depth.
  * Returns the SAME value when nothing was taken out.
  */
 function withoutLocalOnly(value) {
@@ -105,7 +116,7 @@ function withoutLocalOnly(value) {
   let changed = false
   const out = {}
   for (const [k, v] of Object.entries(value)) {
-    if (INSTRUCTIONS_KEY.test(k) || ACCOUNT_KEY.test(k)) {
+    if (INSTRUCTIONS_KEY.test(k) || CATALOGUE_KEY.test(k) || ACCOUNT_KEY.test(k)) {
       changed = true
       continue
     }

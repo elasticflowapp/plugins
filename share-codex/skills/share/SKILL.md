@@ -27,8 +27,9 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
    private temporary folder and prints `{ snapshot, thread_id, … }`. The snapshot
    is the session's record as Codex wrote it — the messages, the tool calls and
    everything they printed, the model and token counts, and Codex's bookkeeping
-   around them — except Codex's own instructions to the model (its base
-   instructions and developer messages), your Codex account ids and your usage
+   around them, the text of this project's `AGENTS.md` among it — except Codex's
+   own instructions to the model (its base instructions, developer messages,
+   tool catalogue and skills listing), your Codex account ids and your usage
    limits: those are taken out before the snapshot is written and never leave
    this machine. What is published is chosen on the server; the rest of the
    upload is not kept.

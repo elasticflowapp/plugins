@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-23
+
+### Fixed
+- **The tool catalogue and the skills listing stay on your machine wherever
+  Codex records them.** 0.2.0 said they did and took them out of Codex's
+  messages to the model, but Codex keeps a second copy in its record of its own
+  state, and that copy was uploaded. The server neither kept nor showed it.
+  Found by an independent review the day 0.2.0 was released; measured on 25
+  real sessions: 0.2.0 uploaded every one of 578 tool descriptions and 25
+  skills listings, 0.2.1 uploads none of them from Codex's own records.
+
+### Changed
+- The README says what else of Codex's bookkeeping is in the upload (its record
+  of your settings, the commands you have approved among them) and that the
+  agent's reasoning summaries are published where Codex recorded one.
+
 ## [0.2.0] - 2026-11-23
 
 ### Changed
