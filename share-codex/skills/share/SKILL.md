@@ -23,12 +23,15 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
    ```
    node "SCRIPT" prepare
    ```
-   It finds this session by `CODEX_THREAD_ID`, writes a slimmed snapshot to a
+   It finds this session by `CODEX_THREAD_ID`, writes a snapshot of it to a
    private temporary folder and prints `{ snapshot, thread_id, … }`. The snapshot
-   holds the conversation as recorded: the messages, the tool calls and
-   everything they printed, the model and token counts. What Codex adds for the
-   model — its own instructions, the copy of `AGENTS.md` it injects, the tool
-   catalogue — and the account ids and usage limits are left out.
+   is the session's record as Codex wrote it — the messages, the tool calls and
+   everything they printed, the model and token counts, and Codex's bookkeeping
+   around them — except Codex's own instructions to the model (its base
+   instructions and developer messages), your Codex account ids and your usage
+   limits: those are taken out before the snapshot is written and never leave
+   this machine. What is published is chosen on the server; the rest of the
+   upload is not kept.
    - If it exits with an error, report its message and stop. Do not look for a
      session file or a session id yourself and do not add options to make it
      pass: publishing the wrong session is worse than not publishing.
@@ -57,6 +60,13 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
 4. **Draft and ask.** Write a `title` (at most 80 characters; `suggestedTitle` is a
    start), a `summary` (at most 300), 3–5 lowercase hyphenated `tags`, and 3–7
    `tos` bullets that complete "this session shows…".
+   The title is also what the link will read as: on a public or unlisted session
+   its words — a-z and 0-9, at most 60 characters, cut at a word — stand in the
+   address before the id. So name the work in specific words and put the ones
+   that matter first, as a phrase a person would say. The address is no reason
+   to change the title's language: Cyrillic is written there in Latin letters,
+   and a title in a script the server has no rule for gives an address of the
+   tool and the id alone, which works the same.
    Then ask the user, in one message:
    - **visibility** — `public`, `unlisted` or `private`;
    - **what to redact** — show `redaction_groups` (each has a number, a kind, a
@@ -85,10 +95,11 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
      of 30 minutes or more;
    - each chapter is `{ start_record_ref, title, hint }`: `start_record_ref` copied
      exactly from the chapter's first turn (the first chapter uses the first turn;
-     refs stay in list order, none repeated); `title` in plain English, at most 120
-     characters, naming what happened ("Tracing the failing upload", not
-     "Discussion"); `hint` one line, at most 200 characters, in the language the
-     user writes in.
+     refs stay in list order, none repeated); `title` in the language the user
+     writes in, at most 120 characters, naming what happened ("Tracing the failing
+     upload", not "Discussion") — its words stand in the chapter page's address
+     too (`…/ch-2-tracing-the-failing-upload`), so put the ones that matter first;
+     `hint` one line, at most 200 characters, in the same language.
    Also note that language as a tag such as `en` or `ru` (`language`). Leave it out
    if you cannot tell. Never invent a `start_record_ref`: the server rejects a
    chapter list with an unknown one and falls back to a plain time split.
@@ -107,13 +118,18 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
 
 8. **Wait and report.** Call `share_status` with `{ jobId }` every couple of seconds
    until `state` is `done` or `failed` (at most 30 times).
-   - `done`: the page's address is `uploadUrl` with its `/api/share/upload` ending
-     replaced by the returned `url`. Finish with exactly one line:
+   - `done`: `url` is a path — the tool, then the title's words and the id
+     (`/chatgpt/fixing-the-upload-digest-1a2b3c4d`; a private session's has no
+     title in it: `/chatgpt/1a2b3c4d`). The page's address is `uploadUrl` with its
+     `/api/share/upload` ending replaced by that `url`, as it came. Finish with
+     exactly one line:
      `Published: <address> — visibility: <visibility>`
    - `redactionWarnings` in the answer: the session is published, but these secrets
      were not removed. Show them and offer to remove them: that is the whole flow
      again from step 1, with `secrets` (and whatever else the user wants) selected
-     in step 4 — the same link is updated in place.
+     in step 4 — it stays the same session under the same id. Its address is
+     written from the title and the visibility of the latest publish, and a link
+     reported before redirects to it.
    - `enrichmentWarnings`: the session is published without the named panel. Say
      which and why; do not retry for it.
    - `failed`: report the error. To retry, start again from step 2 with the same

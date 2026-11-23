@@ -1,6 +1,6 @@
 {
   "name": "ef-share",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Publish Codex sessions to ElasticFlow Share from Codex CLI and the Codex desktop app.",
   "author": {
     "name": "ElasticFlow",

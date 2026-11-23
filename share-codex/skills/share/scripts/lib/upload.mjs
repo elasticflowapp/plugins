@@ -59,7 +59,12 @@ export async function uploadSnapshot({ snapshotPath, url, ticket, fetchImpl = fe
   }
   const text = await res.text()
   if (!res.ok) {
-    const hint = res.status === 401 ? " — the ticket is single-use and short-lived; call share_begin again for a fresh one" : ""
+    const hint =
+      res.status === 401
+        ? " — the ticket is single-use and short-lived; call share_begin again for a fresh one"
+        : res.status === 413
+          ? " — this session's record is larger than the server accepts in one upload"
+          : ""
     throw new Error(`upload failed: HTTP ${res.status} ${text.slice(0, 300)}${hint}`)
   }
   let answer

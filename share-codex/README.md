@@ -41,24 +41,29 @@ $share
 Codex snapshots the session, uploads it, proposes a title, summary and tags,
 asks for the visibility (public, unlisted or private) and what to redact, and
 answers with the link. Publishing the same session again after more work
-updates the same page.
+updates the same session under the same id; the link reads as the title of the
+latest publish, and an earlier link redirects to it.
 
 The upload is the one step that needs network access: with the default sandbox
 Codex asks you to approve that command.
 
 ## What is uploaded
 
-The session as it was recorded: your messages (with an image attached inline,
-if there is one), the agent's messages, and the commands and tool calls **with
-everything they printed**, plus the model name and token counts. If a command printed a secret or the contents of a private
-file, that output is part of the session.
+The session's record as Codex wrote it on your machine (the rollout file). That
+is the conversation — your messages, the agent's messages, the commands and tool calls **with everything they
+printed**, the model name and token counts — and, with it, Codex's bookkeeping
+around the conversation: the model-facing copy of each step, the copy of your
+`AGENTS.md` and the environment description it injects, encrypted reasoning.
 
-Before the upload the plugin leaves out what Codex adds for the model and for
-itself: its base instructions and developer messages, the copy of your
-`AGENTS.md` it injects into the conversation, the tool catalogue, encrypted
-reasoning, your account ids and your usage limits. A step of a kind this version
-of the plugin does not know is uploaded as its name only, and shows on the page
-as a step without content.
+Three things are taken out before the upload and stay on your machine: Codex's
+own instructions to the model (its base instructions and developer messages,
+the tool catalogue among them), your Codex account ids, and your usage limits.
+
+What is published is chosen on the server: the conversation, the skills that
+were loaded, the model and the token counts. The rest of the upload is read past
+— it is not kept and not shown. If a command printed a secret or the contents of
+a private file, that output is part of the conversation. A step of a kind the
+server does not know shows on the page as a step without content.
 
 Redaction happens on the server: the snapshot is uploaded first, then Codex
 shows you what the server flagged, and what you choose to redact is removed

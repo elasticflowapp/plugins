@@ -1,33 +1,32 @@
-// Locating and slimming a Codex rollout (the JSONL transcript Codex CLI and the
-// Codex desktop app write under $CODEX_HOME/sessions/YYYY/MM/DD/).
+// Locating a Codex rollout (the JSONL record Codex CLI and the Codex desktop app
+// write under $CODEX_HOME/sessions/YYYY/MM/DD/) and taking the snapshot that is
+// uploaded.
 //
-// Slimming keeps what ElasticFlow Share shows — the thread items, the turn model
-// and token usage — and leaves out what Codex adds for the model and for itself:
-// the base instructions, developer messages, the copy of AGENTS.md it injects,
-// the tool catalogue, encrypted reasoning, account ids and rate-limit balances.
-// What a command printed is part of the session and is kept as recorded.
+// The snapshot is the rollout as Codex recorded it, with three things taken out
+// that stay on this machine: Codex's own instructions to the model, the Codex
+// account ids, and the account's usage limits. Everything else is uploaded as
+// written; what of it is shown on the page, and what is never stored, is decided
+// by the server, so something the page starts to use tomorrow is already in the
+// upload.
 //
-// Shapes measured on Codex CLI 0.167.0 rollouts, 2026-11-18.
+// Why those three: Codex will not hand them over. Told that the upload held its
+// instructions and account metadata, Codex 0.170 (gpt-6.2-sol) refused to publish
+// — 3 of 3 on 2026-11-19; with them kept here it published.
+//
+// Where they sit, measured on twelve real rollouts of Codex 0.167–0.170
+// (2026-11-19): `session_meta.base_instructions`, `creator_user_id`,
+// `creator_account_id`; every `response_item` of role `developer` (messages and
+// the tool catalogue); `developer_instructions` under `collaboration_mode.settings`
+// in `turn_context` and in `thread_settings_applied`; the `instructions` of the
+// model, the permissions and the collaboration mode in `world_state`;
+// `token_count.rate_limits` (the plan among them). They are removed by KIND of
+// field wherever Codex's bookkeeping holds one, not at those paths only.
 
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
 const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** User-role content Codex injects itself (never typed by the person). */
-const INJECTED_USER_PREFIXES = [
-  "<environment_context>",
-  "<user_instructions>",
-  "# AGENTS.md instructions",
-  "<turn_aborted>",
-  "<subagent_notification>",
-  "<user_shell_command>",
-  "<skill>",
-  "<system_reminder>",
-  "<collaboration_mode>",
-  "<permissions instructions>",
-]
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
 
@@ -72,270 +71,133 @@ export function findRollout(threadId, home = codexHome()) {
   return hits[0]
 }
 
-function pick(obj, keys) {
+/** Roles through which Codex instructs the model. */
+const INSTRUCTING_ROLE = new Set(["developer", "system"])
+/** A field that holds instructions for the model, whatever it is called (`base_instructions`, `developer_instructions`, `instructions` …). */
+const INSTRUCTIONS_KEY = /instructions/i
+/** A field that names the account: its ids, an address, its plan and limits. */
+const ACCOUNT_KEY = /(?:^|_)(?:user|account|org|organization|workspace)_id$|^(?:account|accountId|userId|auth)$|email|^rate_limits?$|plan_type/i
+
+/** A message (or any object) spoken in an instructing role. */
+const instructs = (v) => isObj(v) && typeof v.role === "string" && INSTRUCTING_ROLE.has(v.role)
+
+/**
+ * A value of Codex's bookkeeping without what stays on this machine: no field
+ * of instructions, no account field, no instructing message — at any depth.
+ * Returns the SAME value when nothing was taken out.
+ */
+function withoutLocalOnly(value) {
+  if (Array.isArray(value)) {
+    let changed = false
+    const out = []
+    for (const v of value) {
+      if (instructs(v)) {
+        changed = true
+        continue
+      }
+      const kept = withoutLocalOnly(v)
+      if (kept !== v) changed = true
+      out.push(kept)
+    }
+    return changed ? out : value
+  }
+  if (!isObj(value)) return value
+  let changed = false
   const out = {}
-  for (const k of keys) if (obj[k] !== undefined && obj[k] !== null) out[k] = obj[k]
-  return out
-}
-
-function slimSessionMeta(p) {
-  const out = pick(p, ["id", "session_id", "timestamp", "cwd", "originator", "cli_version", "source", "thread_source", "model_provider", "history_mode"])
-  if (isObj(p.git) && typeof p.git.branch === "string") out.git = { branch: p.git.branch }
-  return out
-}
-
-/** A skill the person invoked by name: Codex adds its SKILL.md as a `<skill>` user-role part. */
-const isSkillPart = (c) => isObj(c) && typeof c.text === "string" && c.text.trimStart().startsWith("<skill>")
-
-/**
- * A user message reduced to what is published: the skills invoked by name and,
- * for legacy history (`withText`), the parts the person typed. Null when nothing
- * of it is.
- */
-function slimUserMessage(p, withText) {
-  const content = Array.isArray(p.content) ? p.content : []
-  const meta = p.internal_chat_message_metadata_passthrough
-  const kinds = isObj(meta) && Array.isArray(meta.content_item_kinds) ? meta.content_item_kinds : null
-  const kept = content.filter((c, i) => {
-    if (!isObj(c) || typeof c.text !== "string") return false
-    if (isSkillPart(c)) return true
-    if (!withText) return false
-    if (kinds && kinds.length === content.length) return kinds[i] === "user.text"
-    return !INJECTED_USER_PREFIXES.some((pre) => c.text.trimStart().startsWith(pre))
-  })
-  if (kept.length === 0) return null
-  const out = { type: "message", role: "user", ...(p.id ? { id: p.id } : {}), content: kept.map((c) => ({ type: c.type, text: c.text })) }
-  // Keep the kinds of the kept parts: without them the server falls back to
-  // guessing injected context by its prefix, and would drop a typed message
-  // that happens to start with one.
-  if (kinds && kinds.length === content.length) {
-    out.internal_chat_message_metadata_passthrough = {
-      content_item_kinds: content.map((c, i) => (kept.includes(c) ? kinds[i] : null)).filter((k) => k !== null),
+  for (const [k, v] of Object.entries(value)) {
+    if (INSTRUCTIONS_KEY.test(k) || ACCOUNT_KEY.test(k)) {
+      changed = true
+      continue
     }
+    const kept = withoutLocalOnly(v)
+    if (kept !== v) changed = true
+    out[k] = kept
   }
-  return out
-}
-
-/** A response item worth keeping when the rollout has no thread items (legacy history). */
-function slimResponseItem(p) {
-  switch (p.type) {
-    case "message":
-      if (p.role === "user") return slimUserMessage(p, true)
-      if (p.role === "assistant") return pick(p, ["type", "role", "id", "phase", "content"])
-      return null
-    case "reasoning": {
-      const summary = Array.isArray(p.summary) ? p.summary : []
-      if (summary.length === 0) return null
-      return { type: "reasoning", ...(p.id ? { id: p.id } : {}), summary }
-    }
-    case "function_call":
-      return pick(p, ["type", "id", "name", "arguments", "call_id"])
-    case "custom_tool_call":
-      return pick(p, ["type", "id", "name", "input", "call_id"])
-    case "function_call_output":
-    case "custom_tool_call_output":
-      return pick(p, ["type", "id", "call_id", "output"])
-    case "local_shell_call":
-      return pick(p, ["type", "id", "call_id", "action", "status"])
-    case "web_search_call":
-      return pick(p, ["type", "id", "action", "status"])
-    default:
-      return null
-  }
+  return changed ? out : value
 }
 
 /**
- * The fields of each thread item kind that a reader sees (measured on Codex
- * 0.167–0.170). A known kind is cut to them, so a field Codex adds to it later
- * is not uploaded unseen. A kind this list does not know is uploaded as its
- * name alone — the page shows that a step happened; what it held is unknown, so
- * whether it is for a reader is unknown too.
+ * What stays on this machine, for one record. Returns the record to upload —
+ * the same object when nothing is taken out — or null to leave the record out.
+ *
+ * Two kinds of record are never looked into — a completed thread item
+ * (`event_msg` / `item_completed`) and a response item of the person or the
+ * agent: a tool call's own argument named `instructions` or `email` there is
+ * the session's work, not Codex's bookkeeping. Every other record is Codex's
+ * own bookkeeping and is filtered by the kind of its fields, at any depth —
+ * the other `event_msg` records included, so a field of theirs with one of
+ * these names is left out even where it repeats something from the session.
  */
-const ITEM_FIELDS = {
-  UserMessage: ["content"],
-  AgentMessage: ["content", "phase"],
-  Reasoning: ["summary_text", "raw_content"],
-  CommandExecution: ["command", "cwd", "parsed_cmd", "status", "aggregated_output", "exit_code"],
-  HookPrompt: [], // context a hook added for the model — never published
-  FileChange: ["changes", "status", "stdout", "stderr"],
-  McpToolCall: ["server", "tool", "arguments", "status", "result", "error"],
-  WebSearch: ["query", "action", "results", "status"],
-  Extension: ["kind", "query", "action", "results", "status"],
-  ContextCompaction: [],
-}
-
-const JWT = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/
-
-/** The ticket of a Share `share_begin` answer (`{ stagingId, uploadUrl, ticket }`), else null. */
-function ticketOf(answer) {
-  let a = answer
-  if (typeof a === "string") {
-    try {
-      a = JSON.parse(a)
-    } catch {
-      return null
-    }
-  }
-  if (!isObj(a) || typeof a.stagingId !== "string" || typeof a.uploadUrl !== "string") return null
-  return typeof a.ticket === "string" && JWT.test(a.ticket) ? a.ticket : null
+function recordToUpload(rec) {
+  const p = rec.payload
+  if (!isObj(p)) return rec
+  if (rec.type === "response_item") return instructs(p) ? null : rec
+  if (rec.type === "event_msg" && p.type === "item_completed") return rec
+  const kept = withoutLocalOnly(p)
+  return kept === p ? rec : { ...rec, payload: kept }
 }
 
 /**
- * The upload tickets earlier publishes of this session were given: the `ticket`
- * of every Share `share_begin` answer in the rollout. A ticket is single-use and
- * spent, but it is a credential-shaped string — a later publish would upload it
- * and the server would report it as an unredacted secret. Collected by VALUE, so
- * it can be masked wherever the flow left it (the answer, the `--ticket`
- * argument, an environment assignment) and nothing that merely looks like one is
- * touched.
+ * The rollout as it is uploaded: every complete record of it, as written —
+ * except what stays on this machine. A record nothing is taken from is passed
+ * byte for byte. A line that is not a record (not a JSON object, even with the
+ * white space around it trimmed) is left out: it cannot be looked into, so it
+ * cannot be vouched for. Codex appends to the file while the session runs, so
+ * its last line can be half written — a line with no newline after it is left
+ * out, never repaired.
  */
-function spentUploadTickets(parsed) {
-  const tickets = new Set()
-  const add = (v) => {
-    const t = ticketOf(v)
-    if (t) tickets.add(t)
-  }
-  const shareBeginCalls = new Set()
-  for (const { rec } of parsed) {
-    const p = rec.payload
-    if (rec.type === "event_msg" && p.type === "item_completed" && isObj(p.item) && p.item.type === "McpToolCall" && p.item.tool === "share_begin") {
-      const result = p.item.result
-      if (isObj(result)) {
-        add(result.structuredContent)
-        for (const c of Array.isArray(result.content) ? result.content : []) if (isObj(c)) add(c.text)
-      }
-    } else if (rec.type === "response_item") {
-      // legacy history: the call names the tool, its output carries the answer
-      if (p.type === "function_call" && typeof p.name === "string" && /(?:^|__)share_begin$/.test(p.name)) shareBeginCalls.add(p.call_id)
-      else if (p.type === "function_call_output" && shareBeginCalls.has(p.call_id)) {
-        add(p.output)
-        if (isObj(p.output)) add(p.output.content)
-        for (const c of Array.isArray(p.output) ? p.output : []) if (isObj(c)) add(c.text)
-      }
-    }
-  }
-  return tickets
-}
-
-function slimItem(item) {
-  // Only the web-search extension has a known shape; other extension kinds are unknown kinds.
-  const fields = item.type === "Extension" && item.kind !== "web.search" ? ["kind", "status"] : ITEM_FIELDS[item.type] ?? ["status"]
-  return { type: item.type, ...(item.id !== undefined ? { id: item.id } : {}), ...pick(item, fields) }
-}
-
-function slimEvent(p) {
-  switch (p.type) {
-    case "item_completed":
-      return isObj(p.item) ? { ...pick(p, ["type", "turn_id", "started_at_ms", "completed_at_ms"]), item: slimItem(p.item) } : null
-    case "task_started":
-      return pick(p, ["type", "turn_id", "started_at"])
-    case "task_complete":
-      return pick(p, ["type", "turn_id", "started_at", "completed_at", "duration_ms"])
-    case "turn_aborted":
-      return pick(p, ["type", "turn_id", "reason"])
-    case "context_compacted":
-      return { type: "context_compacted" }
-    default:
-      return null
-  }
-}
-
-/**
- * Slim a rollout. Returns the JSONL to upload plus counts. Every kept record
- * carries `ordinal` — Codex's own, or the record's line number in the source —
- * so the server's fallback record ids do not move when lines are dropped.
- */
-export function slimRollout(jsonl) {
-  const parsed = []
-  const lines = jsonl.split("\n")
-  for (let i = 0; i < lines.length; i++) {
-    const s = lines[i].trim()
-    if (!s) continue
-    try {
-      const rec = JSON.parse(s)
-      if (isObj(rec) && isObj(rec.payload)) parsed.push({ rec, line: i })
-    } catch {
-      /* a torn last line of a live rollout — skip */
-    }
-  }
-  const hasUsageRecords = parsed.some(({ rec }) => rec.type === "token_usage_record")
-  // A session begun on a Codex without thread items and continued on one with
-  // them: the turns before the first thread item keep their response items, every
-  // later turn its thread items (the server reads it the same way). Turns are
-  // delimited by `task_started`.
-  const turnOf = []
-  let firstItemTurn = Infinity
-  let turn = 0
-  for (const { rec } of parsed) {
-    const kind = rec.type === "event_msg" ? rec.payload.type : null
-    if (kind === "task_started") turn++
-    if (kind === "item_completed" && turn < firstItemTurn) firstItemTurn = turn
-    turnOf.push(turn)
-  }
-  const hasItems = firstItemTurn !== Infinity
-
+export function snapshotOf(raw) {
+  const cut = raw === "" || raw.endsWith("\n") ? raw.length : raw.lastIndexOf("\n") + 1
   const out = []
-  let meta = null
-  parsed.forEach(({ rec, line }, index) => {
-    const p = rec.payload
-    let payload = null
-    switch (rec.type) {
-      case "session_meta":
-        payload = slimSessionMeta(p)
-        meta = meta ?? payload
-        break
-      case "turn_context":
-        payload = pick(p, ["turn_id", "cwd", "model", "effort"])
-        break
-      case "token_usage_record":
-        payload = isObj(p.usage) ? pick(p, ["turn_id", "usage"]) : null
-        break
-      case "compacted":
-        payload = {}
-        break
-      case "response_item":
-        // In a turn with thread items the response items are the model-facing copy —
-        // all but the skills invoked by name, which exist nowhere else.
-        if (turnOf[index] < firstItemTurn) payload = slimResponseItem(p)
-        else payload = p.type === "message" && p.role === "user" ? slimUserMessage(p, false) : null
-        break
-      case "event_msg":
-        if (p.type === "token_count") {
-          const last = isObj(p.info) ? p.info.last_token_usage : null
-          payload = !hasUsageRecords && isObj(last) ? { type: "token_count", info: { last_token_usage: last } } : null
-        } else {
-          payload = slimEvent(p)
-        }
-        break
-      default:
-        payload = null // world_state, future record kinds: not needed to show the session
+  for (const line of raw.slice(0, cut).split("\n")) {
+    const text = line.trim() // also a byte-order mark, a form feed, a no-break space
+    if (!text) continue
+    let rec
+    try {
+      rec = JSON.parse(text)
+    } catch {
+      continue
     }
-    if (payload === null) return
-    out.push({
-      timestamp: rec.timestamp ?? null,
-      ordinal: typeof rec.ordinal === "number" ? rec.ordinal : line,
-      type: rec.type,
-      payload,
-    })
-  })
+    if (!isObj(rec)) continue
+    const kept = recordToUpload(rec)
+    if (kept === null) continue
+    out.push(kept === rec ? text : JSON.stringify(kept))
+  }
+  return out.length ? out.join("\n") + "\n" : ""
+}
 
-  // A ticket is base64url text, so it sits in the serialized records verbatim.
-  let slimmed = out.map((r) => JSON.stringify(r)).join("\n") + (out.length ? "\n" : "")
-  for (const ticket of spentUploadTickets(parsed)) slimmed = slimmed.split(ticket).join("[upload-ticket]")
+/**
+ * What `prepare` reports about a snapshot. `contentRecords` counts the records
+ * that can carry conversation (thread items, response items): zero means there
+ * is nothing to publish yet. Whether those records hold anything a reader will
+ * see is the server's answer, not this count's.
+ */
+export function describeRollout(jsonl) {
+  let meta = null
+  let records = 0
+  let contentRecords = 0
+  for (const line of jsonl.split("\n")) {
+    const s = line.trim()
+    if (!s) continue
+    let rec
+    try {
+      rec = JSON.parse(s)
+    } catch {
+      continue
+    }
+    if (!isObj(rec) || !isObj(rec.payload)) continue
+    records++
+    if (rec.type === "session_meta") meta = meta ?? rec.payload
+    else if (rec.type === "response_item" || (rec.type === "event_msg" && rec.payload.type === "item_completed")) contentRecords++
+  }
   return {
-    jsonl: slimmed,
-    meta,
-    recordsIn: parsed.length,
-    recordsOut: out.length,
-    /** records that carry conversation: thread items, or legacy response items */
-    contentRecords: out.filter(
-      (r) => r.type === "response_item" || (r.type === "event_msg" && r.payload.type === "item_completed"),
-    ).length,
-    historyMode: hasItems ? "paginated" : "legacy",
+    cliVersion: typeof meta?.cli_version === "string" ? meta.cli_version : null,
+    originator: typeof meta?.originator === "string" ? meta.originator : null,
+    records,
+    contentRecords,
   }
 }
 
-/** The thread id recorded in a rollout's first `session_meta` record, or null. */
 export function rolloutThreadId(jsonl) {
   for (const line of jsonl.split("\n")) {
     const s = line.trim()
@@ -360,9 +222,9 @@ export function rolloutThreadId(jsonl) {
  * nothing of the publishing flow — this is how the server knows that the last
  * turn asked for it, and keeps that turn off the page.
  */
-export function publishMarker(slimJsonl, clientVersion) {
+export function publishMarker(jsonl, clientVersion) {
   let last = -1
-  for (const line of slimJsonl.split("\n")) {
+  for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue
     try {
       const ordinal = JSON.parse(line).ordinal

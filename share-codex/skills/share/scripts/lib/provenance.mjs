@@ -52,7 +52,7 @@ export function parseFrontmatter(md) {
 /**
  * The Skill identifier ElasticFlow Share gives a SKILL.md path: a plugin skill
  * is `<plugin>:<skill>`, anything else is the bare skill name. Mirrors the
- * server's `skillNameFromPath` (viewer/lib/runtimes/codex/lower.ts) — a parity
+ * server's own naming of skills — a parity
  * test pins the two.
  */
 export function skillNameFromPath(skillPath, content) {
