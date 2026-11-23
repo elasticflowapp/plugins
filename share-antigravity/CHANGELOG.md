@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-23
+
+### Changed
+- **Where to sign in, in the app.** The README and the skill named only the
+  `agy` CLI's way. They now name the Antigravity app's too: Customizations →
+  Installed → **ElasticFlow Share** → the **Accounts** tab → the `share` server
+  → **Sign in**. A sign-in made in the app serves the `agy` CLI too — seen with
+  the app 2.34.0 and `agy` 1.5.15. When the Share server is not signed in, the
+  agent names both places, the app's first: the app's way was followed to the
+  end, the CLI's as far as its request for a code.
+
 ## [0.2.1] - 2026-11-23
 
 ### Changed

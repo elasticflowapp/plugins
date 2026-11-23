@@ -39,10 +39,19 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles
 
 2. **Begin.** Call `share_begin` with `{}`. It returns `{ stagingId, uploadUrl, ticket }`.
    - If the `share` server is not signed in (the tool is missing, or the call is
-     refused as unauthorized), tell the user to sign in to it — in the `agy` CLI:
-     `/mcp`, the `ef-share_share` server, **Authenticate**; the CLI then asks them
-     for an authorization code — and stop until they have. The code is theirs to
-     paste into the CLI: never ask for it in the conversation and never handle it.
+     refused as unauthorized), tell the user to sign in to it, name both places
+     where that is done — the app's first: it is the way that was followed to
+     the end, the CLI's as far as its request for a code — and stop until they
+     have:
+     - in the Antigravity app: Customizations → Installed → ElasticFlow Share →
+       the Accounts tab → the `share` server → **Sign in** (a sign-in made
+       there serves the `agy` CLI too — seen with the app 2.34.0 and `agy`
+       1.5.15);
+     - in the `agy` CLI: `/mcp`, the `ef-share_share` server, **Authenticate**;
+       the CLI then asks them for an authorization code.
+
+     The code is theirs to paste into the CLI: never ask for it in the
+     conversation and never handle it.
 
 3. **Upload the snapshot.**
    ```

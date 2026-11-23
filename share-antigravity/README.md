@@ -19,11 +19,22 @@ agy plugin install ./plugins/share-antigravity
 or, inside the `agy` CLI, `/plugin` → **Install from local directory…**. The app,
 the CLI and the IDE read the same plugin folder, so one install serves all three.
 
-Sign in once. In the `agy` CLI type `/mcp`, choose the `ef-share_share` server
-(once it has started it is marked "Auth Needed"), press Enter and pick
-**Authenticate**. Your browser
-opens the ElasticFlow sign-in and consent screen, and the CLI then asks for an
-authorization code to paste. That is how it goes in `agy` 1.5.15.
+Sign in to the Share server, in the app or in the CLI. The app's way was
+followed to the end; the CLI's as far as its request for a code.
+
+- **In the Antigravity app:** Customizations → Installed → **ElasticFlow Share**
+  → the **Accounts** tab → the `share` server → **Sign in**. Before the sign-in
+  the plugin's card is marked "Setup required" and shows "Sign in required"
+  with a **Go to Accounts** button. That is how it goes in the app 2.34.0.
+- **In the `agy` CLI:** type `/mcp`, choose the `ef-share_share` server (once it
+  has started it is marked "Auth Needed"), press Enter and pick
+  **Authenticate**. Your browser opens the ElasticFlow sign-in and consent
+  screen, and the CLI then asks for an authorization code to paste. That is
+  how it goes in `agy` 1.5.15.
+
+A sign-in made in the app serves the `agy` CLI too: after it, `agy` in a
+terminal published a session with no sign-in of its own (the app 2.34.0, `agy`
+1.5.15).
 
 ## Use
 

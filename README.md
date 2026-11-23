@@ -33,7 +33,12 @@ git clone https://github.com/elasticflowapp/plugins
 agy plugin install ./plugins/share-antigravity
 ```
 
-One install serves the Antigravity app, the `agy` CLI and the IDE. Sign in once: in the `agy` CLI type `/mcp`, choose the `ef-share_share` server and pick **Authenticate**; your browser opens the ElasticFlow sign-in, and the CLI then asks for an authorization code to paste.
+One install serves the Antigravity app, the `agy` CLI and the IDE. Sign in to the Share server, in the app or in the CLI — the app's way was followed to the end, the CLI's as far as its request for a code:
+
+- In the Antigravity app (2.34.0): Customizations → Installed → **ElasticFlow Share** → the **Accounts** tab → the `share` server → **Sign in**.
+- In the `agy` CLI (1.5.15): type `/mcp`, choose the `ef-share_share` server and pick **Authenticate**; your browser opens the ElasticFlow sign-in, and the CLI then asks for an authorization code to paste.
+
+A sign-in made in the app serves the `agy` CLI too — seen with the same two versions.
 
 ## Plugins
 
@@ -41,6 +46,6 @@ One install serves the Antigravity app, the `agy` CLI and the IDE. Sign in once:
 |--------|-----|-------------|
 | [`ef-share`](./share) | Claude Code | Share Claude Code sessions to ElasticFlow Share. Adds the `/share` command and the ElasticFlow Share MCP (`https://share.elasticflow.app/mcp`); authorizes via OAuth on first use. |
 | [`ef-share`](./share-codex) | Codex | Share Codex sessions to ElasticFlow Share. Adds the `share` skill (`$share`, or just ask) and the ElasticFlow Share MCP (`https://share.elasticflow.app/mcp`); authorize once with `codex mcp login share`. |
-| [`ef-share`](./share-antigravity) | Antigravity | Share Antigravity sessions to ElasticFlow Share. Adds the `share` skill (`/share`, or just ask) and the ElasticFlow Share MCP (`https://share.elasticflow.app/mcp`); sign in once from `/mcp` in the `agy` CLI (the `ef-share_share` server, **Authenticate**). |
+| [`ef-share`](./share-antigravity) | Antigravity | Share Antigravity sessions to ElasticFlow Share. Adds the `share` skill (`/share`, or just ask) and the ElasticFlow Share MCP (`https://share.elasticflow.app/mcp`); sign in from the plugin's **Accounts** tab in the Antigravity app, or start it from `/mcp` in the `agy` CLI (the `ef-share_share` server, **Authenticate**) — see above for how far each way was followed. |
 
 Each agent reads its own marketplace manifest — Claude Code [`.claude-plugin/marketplace.json`](./.claude-plugin/marketplace.json), Codex [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json) — and Antigravity installs the plugin's own folder ([`share-antigravity/plugin.json`](./share-antigravity/plugin.json)). Each plugin lives in its own subdirectory.
