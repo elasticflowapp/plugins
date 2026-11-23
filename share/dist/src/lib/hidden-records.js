@@ -28,7 +28,7 @@ const SHARE_HOST = /elasticflow(?:app)?\.app|elasticflow\.dev|\bshare\b.*upload|
 const SHARE_TOOL = /\bef-share-session\b/;
 /** The share command started by the model through the Skill tool instead of a typed `/share`. */
 const SHARE_SKILL = /^(?:ef-share:)?share$/;
-/** A published session URL: …/share/<id>. */
+/** A published session URL: …/share/<tool>/<title>-<id> (…/share/<id> before ADR-0030). */
 const SHARE_URL = /https?:\/\/\S*\/share\/[A-Za-z0-9]/;
 /** Assistant narration that the publish completed. */
 const PUBLISHED_DONE = /"?share_status"?\s*[:=]?\s*"?done"?|\bPublished:\s|\bshare_status\b.*\bdone\b/i;

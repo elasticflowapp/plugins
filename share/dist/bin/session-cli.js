@@ -142,7 +142,7 @@ function cmdShow(args) {
             throw new UsageError(`${dir} has no chapter candidates — run "ef-share-session prepare" again`);
         out({
             write_to: path.join(dir, "authored", "chapters.json"),
-            format: { language: "optional, e.g. ru", chapters: [{ start_record_ref: "<uuid of the chapter's first turn>", title: "≤120 chars, English", hint: "≤200 chars, session language — required" }] },
+            format: { language: "optional, e.g. ru", chapters: [{ start_record_ref: "<uuid of the chapter's first turn>", title: "≤120 chars, session language", hint: "≤200 chars, session language — required" }] },
             turns: c.turns,
         });
     }

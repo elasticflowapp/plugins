@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-23
+
+The texts follow the session addresses the server now writes (ADR-0030), and
+chapter titles are written in the session's language. What `/share` reads,
+withholds and uploads is as in 0.12.1.
+
+### Changed
+- **`/share` and the chapter skill describe a session's address as the server
+  now writes it** (ADR-0030): `/<tool>/<title>-<id>` for a public or unlisted
+  session — `/claude-code/fixing-the-upload-digest-1a2b3c4d` —
+  `/<tool>/<id>` for a private one, and `…/ch-<n>-<chapter title>` for a
+  chapter's page (`…/ch-<n>` under a private session's address). The title's
+  words are written in a-z and 0-9, at most 60 characters, cut at a word;
+  Cyrillic is written in Latin letters, and a title in a script the server has
+  no rule for leaves the address without words. Nothing that builds or reads a
+  link changed: it is built as before — the upload address without
+  `/api/share/upload`, then the `url` the publish job answers with — and a
+  link reported earlier (`/<id>`) redirects to the session's address for
+  whoever may open the session. `commands/share.md` shows the `url` in its new
+  shape, tells whoever drafts the title that it is what the link will read as
+  — specific words, the ones that matter first, in the language the title
+  would be in anyway — and no longer says that a session published again keeps
+  its URL: it keeps its id, and its address is written from the title and the
+  visibility of the latest publish. `author-chapters` says that a chapter's
+  title is part of its page's address and of the page title a public session's
+  chapter offers a search engine, and how to write one that serves both —
+  specific words, the ones that matter first, a phrase and not a list of
+  keywords.
+- **Chapter titles are written in the session's language.** Until now
+  `author-chapters` asked for English whatever language the session was in,
+  while the hint followed the session. The skill, and the format
+  `ef-share-session show chapters` prints, now ask for the session's language
+  in both — the owner's decision of 2026-11-23. The limit stays at 120
+  characters. In a chapter's address a Cyrillic title is written in Latin
+  letters (`ch-2-nastroyka-khukov`); a title in a script the server has no
+  rule for leaves `ch-2`. Automation titles stay English.
+
 ## [0.12.1] - 2026-11-22
 
 Closes the notes the 0.12.0 release review left open. The shapes and counts
@@ -373,7 +410,8 @@ Initial public release of the `ef-share` Claude Code plugin.
 
 <!-- Releases are tagged in elasticflowapp/plugins from v0.8.0 on. 0.5.0–0.7.0 were published
      before that: each links to the commit that published it (its share/ tree). -->
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.2
 [0.12.1]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.1
 [0.12.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.0
 [0.11.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.11.0
