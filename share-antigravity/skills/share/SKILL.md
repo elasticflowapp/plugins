@@ -39,9 +39,10 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles
 
 2. **Begin.** Call `share_begin` with `{}`. It returns `{ stagingId, uploadUrl, ticket }`.
    - If the `share` server is not signed in (the tool is missing, or the call is
-     refused as unauthorized), tell the user to sign in to it — on the ElasticFlow
-     Share plugin under Customizations in the app, or with `/plugin` in the CLI —
-     and stop until they have.
+     refused as unauthorized), tell the user to sign in to it — in the `agy` CLI:
+     `/mcp`, the `ef-share_share` server, **Authenticate**; the CLI then asks them
+     for an authorization code — and stop until they have. The code is theirs to
+     paste into the CLI: never ask for it in the conversation and never handle it.
 
 3. **Upload the snapshot.**
    ```

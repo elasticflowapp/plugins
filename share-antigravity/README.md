@@ -19,8 +19,11 @@ agy plugin install ./plugins/share-antigravity
 or, inside the `agy` CLI, `/plugin` → **Install from local directory…**. The app,
 the CLI and the IDE read the same plugin folder, so one install serves all three.
 
-The first time the plugin talks to ElasticFlow Share, Antigravity asks you to
-sign in — your browser opens the ElasticFlow sign-in and consent screen.
+Sign in once. In the `agy` CLI type `/mcp`, choose the `ef-share_share` server
+(once it has started it is marked "Auth Needed"), press Enter and pick
+**Authenticate**. Your browser
+opens the ElasticFlow sign-in and consent screen, and the CLI then asks for an
+authorization code to paste. That is how it goes in `agy` 1.5.15.
 
 ## Use
 

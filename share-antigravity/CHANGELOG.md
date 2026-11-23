@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-23
+
+### Changed
+- **Where to sign in.** The README and the skill said Antigravity asks for the
+  sign-in by itself the first time, or offers it under `/plugin`. It does
+  neither in `agy` 1.5.15: the Share server is signed in from `/mcp` — the
+  `ef-share_share` server, **Authenticate** — and the CLI then asks for an
+  authorization code to paste. Both texts say so now, and the skill tells the
+  agent that the code is the person's to paste and never to ask for.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added
