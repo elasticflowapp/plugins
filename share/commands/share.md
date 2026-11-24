@@ -33,6 +33,7 @@ The plugin's MCP tools are named `mcp__plugin_ef-share_share__share_begin`, `…
    - **Visibility**: public, unlisted or private.
    - **Results — only when `results` is not empty.** Ask whether to share the results of the work as well, or only the session. This question is REQUIRED: a result is published only on an explicit yes given in this /share run — never by default, never because an earlier publish included it, never because the person said "share everything" before seeing the list.
      - A result is published byte for byte and cannot be redacted afterwards, so show what it IS, not how big it is: for each candidate its `entry` and `path`, **every file in `files` by name**, `total_bytes`, the hosts in `loads_from_network` (contacted when a reader runs it — only these are allowed), and each entry of `not_published` with its reason (those references will be missing in the published result).
+     - If a candidate has `isTemplateHint: true`, explicitly warn the person that it looks like an unexpanded build template or skeleton (e.g., `template.html` with build placeholders) rather than a final deliverable before they choose it.
      - Say that a picture of each published page is taken on this machine and published with it — it is what a reader sees before they run the result. To take it, the page is opened once at upload in the installed Chrome, Edge, Chromium or Brave, without a window: its scripts run on this machine and it contacts the hosts in `loads_from_network` from here (a page that uses WebRTC can also reach other addresses from this machine — the policy does not govern WebRTC). Before anything is public the person is told what the picture shows and where the file is (step 6), and the result can be published without one.
      - A candidate with `blocked` set cannot be published; say why. One with `fits_this_upload: false` is too large to go with this session (`room_for_results_bytes` is what is left); say so.
      - Let the person pick any subset of up to 12 results (what one publish takes); "only the session" is always an option.
@@ -43,7 +44,7 @@ The plugin's MCP tools are named `mcp__plugin_ef-share_share__share_begin`, `…
 
 5. **Classify the automations** — only when `automations.kinds` is greater than 0: invoke the `classify-automations` skill with `dir`. It writes `<dir>/authored/automations.json`.
 
-6. **Begin and upload.** Call `share_begin({})` (on the first call in a session Claude Code asks for OAuth — wait for approval). It returns `{ stagingId, uploadUrl, ticket }`. Then, with the Bash tool:
+6. **Begin and upload.** Call `share_begin({})` (on the first call in a session Claude Code asks for OAuth — wait for approval). It returns `{ stagingId, uploadUrl, ticket, publisher }`. When `publisher` is present (from `share_begin` or the upload response), explicitly tell the person before publishing: `Publishing to ElasticFlow Share under account @<handle> (<Display Name>)` (omit the parenthetical when displayName is absent). Then, with the Bash tool:
    ```
    ef-share-session upload --dir "<dir>" --url "<uploadUrl>" --ticket "<ticket>" --results none
    ```

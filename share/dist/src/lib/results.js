@@ -33,58 +33,243 @@ export const RESULT_LIMITS = {
 };
 /** Asset types a page can load. Anything else a reference points at stays on disk. */
 const ASSET_EXT = new Set(Object.keys(RESULT_MIME).filter((ext) => !ENTRY_EXT.has(ext)));
-const WRITE_TOOLS = new Set(["Write"]);
-const EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
+const WRITE_TOOLS = new Set(["Write", "write_file"]);
+const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "edit_file", "apply_patch"]);
+const SHELL_TOOLS = new Set(["Bash", "exec_command", "run_command", "shell", "shell_command", "local_shell", "container.exec"]);
+const BROWSER_TOOL = /(?:chrome|playwright|devtools|browser)/i;
+const TEMPLATE_PATH_RE = /(^|\/)(template|skeleton|boilerplate)[^/]*\.html?$/i;
+const BUILD_PLACEHOLDER_RE = /\/\*__[A-Z0-9_]+__\*\//;
+const MUSTACHE_PLACEHOLDER_RE = /\{\{[^}]{1,80}\}\}/;
+const SKIP_WALK_DIRS = new Set(["node_modules", "dist", "build", ".next", "coverage", "__pycache__", "vendor"]);
+const MAX_WALK_DEPTH = 4;
+const MAX_WALK_ENTRIES = 2000;
 function isEntry(p) { return ENTRY_EXT.has(path.extname(p).toLowerCase()); }
-/** Every .html the transcript wrote, edited or sent to the person, keyed by absolute path. */
-export function collectTouchedPages(jsonl, bySubagent, into = new Map()) {
+/** True when a file looks like a build skeleton/template rather than a rendered deliverable. */
+export function detectTemplateHint(filePath, entryText, bytes) {
+    const normalized = filePath.replace(/\\/g, "/");
+    if (TEMPLATE_PATH_RE.test(normalized))
+        return true;
+    if (entryText !== null) {
+        if (BUILD_PLACEHOLDER_RE.test(entryText))
+            return true;
+        if (bytes < 2048 && MUSTACHE_PLACEHOLDER_RE.test(entryText))
+            return true;
+    }
+    return false;
+}
+function parseIsoMs(ts) {
+    if (!ts || !/^\d{4}-\d{2}-\d{2}T/.test(ts))
+        return null;
+    const ms = Date.parse(ts);
+    return Number.isFinite(ms) ? ms : null;
+}
+function addTouch(into, abs, kind, ts, bySubagent) {
+    const t = into.get(abs) ?? { path: abs, writes: 0, edits: 0, sent: false, browserOpened: false, bashBuilt: false, last: null, bySubagent };
+    if (kind === "write")
+        t.writes++;
+    else if (kind === "edit")
+        t.edits++;
+    else if (kind === "sent")
+        t.sent = true;
+    else if (kind === "browser")
+        t.browserOpened = true;
+    else if (kind === "bash")
+        t.bashBuilt = true;
+    if (ts && (t.last === null || ts > t.last))
+        t.last = ts;
+    if (!bySubagent)
+        t.bySubagent = false;
+    into.set(abs, t);
+}
+function extractUrlsFromInput(value, out, depth = 0) {
+    if (depth > 4 || value === null || value === undefined)
+        return;
+    if (typeof value === "string") {
+        if (/^(?:file|https?):\/\//i.test(value.trim()))
+            out.push(value.trim());
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value)
+            extractUrlsFromInput(item, out, depth + 1);
+        return;
+    }
+    if (typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+            if (k === "url" || k === "uri" || k === "href" || k === "actions" || k === "input" || k === "params") {
+                extractUrlsFromInput(v, out, depth + 1);
+            }
+        }
+    }
+}
+/** Extract explicit .html/.htm path references mentioned in a shell command string (redirections, -o flags, filenames). */
+function htmlTokensInShellCommand(command) {
+    const found = [];
+    const seen = new Set();
+    // Match quoted or unquoted path tokens ending in .html or .htm (excluding http(s):// remote URLs)
+    for (const m of command.matchAll(/(?:["'`]([^"'`\r\n]{1,300}\.html?)["'`]|(?:^|[\s>=,])([^\s"'`<>&|;()]{1,300}\.html?)(?=$|[\s"'`<>&|;),]))/gi)) {
+        const raw = (m[1] ?? m[2] ?? "").trim();
+        if (!raw || /^(?:https?:|mailto:|data:)/i.test(raw))
+            continue;
+        if (/[*?$`{}[\]]/.test(raw))
+            continue;
+        if (raw.toLowerCase().startsWith("file://")) {
+            try {
+                const u = new URL(raw);
+                const p = decodeURIComponent(u.pathname);
+                if (isEntry(p) && !seen.has(p)) {
+                    seen.add(p);
+                    found.push(p);
+                }
+            }
+            catch { /* ignore malformed url */ }
+            continue;
+        }
+        const clean = raw.replace(/^--?(?:out|output|file|page)=/i, "");
+        if (!clean || !isEntry(clean))
+            continue;
+        if (!seen.has(clean)) {
+            seen.add(clean);
+            found.push(clean);
+        }
+    }
+    return found;
+}
+/** Every .html the transcript wrote, edited, sent, opened in a browser, or referenced in shell commands, keyed by absolute path. */
+export function collectTouchedPages(jsonl, bySubagent = false, into = new Map(), ctx) {
     for (const rec of records(jsonl)) {
+        const cwd = typeof rec["cwd"] === "string" && path.isAbsolute(rec["cwd"]) ? path.normalize(rec["cwd"]) : null;
+        const ts = typeof rec["timestamp"] === "string" ? rec["timestamp"] : null;
+        if (ctx) {
+            if (cwd)
+                ctx.cwds.add(cwd);
+            const ms = parseIsoMs(ts);
+            if (ms !== null) {
+                if (ctx.minTsMs === null || ms < ctx.minTsMs)
+                    ctx.minTsMs = ms;
+                if (ctx.maxTsMs === null || ms > ctx.maxTsMs)
+                    ctx.maxTsMs = ms;
+            }
+        }
         if (rec["type"] !== "assistant")
             continue;
         const content = (rec["message"] ?? {})["content"];
         if (!Array.isArray(content))
             continue;
-        const cwd = typeof rec["cwd"] === "string" ? rec["cwd"] : null;
-        const ts = typeof rec["timestamp"] === "string" ? rec["timestamp"] : null;
         for (const part of content) {
             if (!part || typeof part !== "object" || part["type"] !== "tool_use")
                 continue;
             const name = String(part["name"] ?? "");
             const input = (part["input"] ?? {});
-            const paths = [];
+            // Signal 1: Direct file tools
+            const directPaths = [];
             let kind = null;
             if (WRITE_TOOLS.has(name) || EDIT_TOOLS.has(name)) {
                 if (typeof input["file_path"] === "string")
-                    paths.push(input["file_path"]);
+                    directPaths.push(input["file_path"]);
+                if (typeof input["Path"] === "string")
+                    directPaths.push(input["Path"]);
+                if (name === "apply_patch") {
+                    const changes = input["changes"];
+                    if (changes && typeof changes === "object" && !Array.isArray(changes)) {
+                        for (const [target, ch] of Object.entries(changes)) {
+                            const moved = ch && typeof ch === "object" && typeof ch["move_path"] === "string" ? ch["move_path"] : null;
+                            if (!ch || typeof ch !== "object" || ch["type"] !== "delete")
+                                directPaths.push(moved ?? target);
+                        }
+                    }
+                    else if (typeof input["patch"] === "string") {
+                        for (const pm of input["patch"].matchAll(/^\*\*\* (?:Add File|Update File|Move to): (.+)$/gm))
+                            directPaths.push(pm[1].trim());
+                    }
+                }
                 kind = WRITE_TOOLS.has(name) ? "write" : "edit";
             }
             else if (name === "SendUserFile") {
                 if (Array.isArray(input["files"]))
                     for (const f of input["files"])
                         if (typeof f === "string")
-                            paths.push(f);
+                            directPaths.push(f);
                 kind = "sent";
             }
-            if (kind === null)
+            if (kind !== null) {
+                for (const raw of directPaths) {
+                    if (!isEntry(raw))
+                        continue;
+                    const abs = path.isAbsolute(raw) ? path.normalize(raw) : cwd ? path.resolve(cwd, raw) : null;
+                    if (!abs)
+                        continue;
+                    addTouch(into, abs, kind, ts, bySubagent);
+                }
                 continue;
-            for (const raw of paths) {
-                if (!isEntry(raw))
+            }
+            // Signal 2: Browser inspection & verification tools
+            if (BROWSER_TOOL.test(name)) {
+                const urls = [];
+                extractUrlsFromInput(input, urls);
+                for (const rawUrl of urls) {
+                    let u;
+                    try {
+                        u = new URL(rawUrl);
+                    }
+                    catch {
+                        continue;
+                    }
+                    if (u.protocol === "file:") {
+                        let filePath;
+                        try {
+                            filePath = decodeURIComponent(u.pathname);
+                        }
+                        catch {
+                            continue;
+                        }
+                        if (!isEntry(filePath))
+                            continue;
+                        const abs = path.normalize(filePath);
+                        addTouch(into, abs, "browser", ts, bySubagent);
+                    }
+                    else if ((u.protocol === "http:" || u.protocol === "https:") && (u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "::1")) {
+                        let rel;
+                        try {
+                            rel = decodeURIComponent(u.pathname).replace(/^\/+/, "");
+                        }
+                        catch {
+                            continue;
+                        }
+                        if (!rel || !isEntry(rel))
+                            continue;
+                        if (ctx) {
+                            ctx.pendingLocalUrls.push({ rel, cwd, ts, bySubagent });
+                        }
+                        else if (cwd) {
+                            const abs = path.resolve(cwd, rel);
+                            if (inside(cwd, abs))
+                                addTouch(into, abs, "browser", ts, bySubagent);
+                        }
+                    }
+                }
+                continue;
+            }
+            // Signal 3a: Shell commands referencing .html files directly
+            if (SHELL_TOOLS.has(name)) {
+                const rawCmd = input["command"] ?? input["cmd"];
+                const cmd = typeof rawCmd === "string" ? rawCmd : Array.isArray(rawCmd) ? rawCmd.join(" ") : "";
+                if (!cmd)
                     continue;
-                const abs = path.isAbsolute(raw) ? path.normalize(raw) : cwd ? path.resolve(cwd, raw) : null;
-                if (!abs)
-                    continue;
-                const t = into.get(abs) ?? { path: abs, writes: 0, edits: 0, sent: false, last: null, bySubagent };
-                if (kind === "write")
-                    t.writes++;
-                else if (kind === "edit")
-                    t.edits++;
-                else
-                    t.sent = true;
-                if (ts && (t.last === null || ts > t.last))
-                    t.last = ts;
-                if (!bySubagent)
-                    t.bySubagent = false;
-                into.set(abs, t);
+                const cmdCwd = typeof input["cwd"] === "string" && path.isAbsolute(input["cwd"])
+                    ? path.normalize(input["cwd"])
+                    : cwd;
+                if (ctx && cmdCwd)
+                    ctx.cwds.add(cmdCwd);
+                for (const token of htmlTokensInShellCommand(cmd)) {
+                    const abs = path.isAbsolute(token) ? path.normalize(token) : cmdCwd ? path.resolve(cmdCwd, token) : null;
+                    if (!abs)
+                        continue;
+                    // Only record shell-mentioned paths inside the command's folder tree (or absolute paths later verified on disk)
+                    if (cmdCwd && !path.isAbsolute(token) && !inside(cmdCwd, abs))
+                        continue;
+                    addTouch(into, abs, "bash", ts, bySubagent);
+                }
             }
         }
     }
@@ -135,6 +320,16 @@ export function nameCollides(taken, key) {
             return true;
     return false;
 }
+function isExecutableScriptTag(attrs) {
+    if (/\bsrc\s*=/i.test(attrs))
+        return false;
+    const tm = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(attrs);
+    if (!tm)
+        return true;
+    const raw = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim().toLowerCase();
+    const mime = raw.split(";")[0].trim();
+    return mime === "" || mime === "module" || mime === "text/javascript" || mime === "application/javascript";
+}
 function refsInHtml(html) {
     const out = [];
     const attr = (v) => decodeEntities(v ?? "");
@@ -149,8 +344,10 @@ function refsInHtml(html) {
     }
     for (const m of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi))
         out.push(...refsInCss(m[1]));
-    for (const m of html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi))
-        out.push(...refsInJs(m[1]));
+    for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+        if (isExecutableScriptTag(m[1]))
+            out.push(...refsInJs(m[2]));
+    }
     return out;
 }
 function refsInCss(css) {
@@ -188,7 +385,7 @@ function readBytes(p) {
     }
 }
 export const sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex");
-const nothing = (blocked, bytes = 0) => ({ bytes, sha256: null, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked });
+const nothing = (blocked, bytes = 0) => ({ bytes, sha256: null, isTemplateHint: false, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked });
 export function describeResult(entryPath) {
     const L = RESULT_LIMITS;
     let entryReal;
@@ -223,7 +420,9 @@ export function describeResult(entryPath) {
     let total = entryData.length;
     const nameKey = (rel) => rel.normalize("NFC").toLowerCase();
     const taken = new Set([nameKey(path.basename(entryPath))]);
-    const queue = [{ file: entryReal, depth: 0, text: entryData.toString("utf-8") }];
+    const entryText = entryData.toString("utf-8");
+    const isTemplateHint = detectTemplateHint(entryPath, entryText, entryData.length);
+    const queue = [{ file: entryReal, depth: 0, text: entryText }];
     const visited = new Set([entryReal]);
     while (queue.length > 0) {
         const { file, depth, text } = queue.shift();
@@ -333,6 +532,7 @@ export function describeResult(entryPath) {
     return {
         bytes: entryData.length,
         sha256: sha256Hex(entryData),
+        isTemplateHint,
         assets: [...assets.values()].sort((a, b) => a.rel.localeCompare(b.rel)),
         skipped: [...skipped.entries()].map(([ref, reason]) => ({ ref: ref.slice(0, 200), reason })).slice(0, 40),
         remote_hosts: [...hosts].sort().slice(0, 20),
@@ -340,46 +540,200 @@ export function describeResult(entryPath) {
         blocked: null,
     };
 }
+function isUnsafeWalkRoot(dir) {
+    const norm = path.normalize(dir);
+    if (norm === path.parse(norm).root)
+        return true;
+    const home = process.env["HOME"] ? path.normalize(process.env["HOME"]) : null;
+    if (home && norm === home)
+        return true;
+    if (norm === "/tmp" || norm === "/private/tmp" || norm === "/var" || norm === "/Users")
+        return true;
+    return false;
+}
+/** Deduplicate session cwds to their highest non-nested roots so each tree is walked once. */
+function topLevelRoots(cwds) {
+    const real = [];
+    for (const c of cwds) {
+        try {
+            const r = fs.realpathSync(c);
+            if (!isUnsafeWalkRoot(r) && fs.statSync(r).isDirectory() && !real.includes(r))
+                real.push(r);
+        }
+        catch { /* folder gone */ }
+    }
+    real.sort((a, b) => a.length - b.length || a.localeCompare(b));
+    const roots = [];
+    for (const r of real) {
+        if (!roots.some((parent) => inside(parent, r)))
+            roots.push(r);
+    }
+    return roots;
+}
+/** Bounded walk of session workspace folders for .html/.htm files modified during the session window. */
+function walkWorkspaceDeliverables(roots, minTsMs, maxTsMs, into) {
+    const windowStart = minTsMs - 5_000;
+    const windowEnd = maxTsMs + 60_000;
+    let seenEntries = 0;
+    const stack = roots.map((dir) => ({ dir, depth: 0 }));
+    while (stack.length > 0 && seenEntries < MAX_WALK_ENTRIES) {
+        const { dir, depth } = stack.pop();
+        let dirents;
+        try {
+            dirents = fs.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            continue;
+        }
+        for (const d of dirents) {
+            if (++seenEntries > MAX_WALK_ENTRIES)
+                break;
+            if (d.name.startsWith("."))
+                continue;
+            const full = path.join(dir, d.name);
+            if (d.isSymbolicLink())
+                continue;
+            if (d.isDirectory()) {
+                if (depth + 1 <= MAX_WALK_DEPTH && !SKIP_WALK_DIRS.has(d.name)) {
+                    stack.push({ dir: full, depth: depth + 1 });
+                }
+                continue;
+            }
+            if (!d.isFile() || !isEntry(d.name))
+                continue;
+            let st;
+            try {
+                st = fs.statSync(full);
+            }
+            catch {
+                continue;
+            }
+            if (st.mtimeMs < windowStart || st.mtimeMs > windowEnd)
+                continue;
+            const mtimeIso = new Date(st.mtimeMs).toISOString();
+            const existing = into.get(full);
+            if (existing) {
+                existing.bashBuilt = true;
+                if (existing.last === null || mtimeIso > existing.last)
+                    existing.last = mtimeIso;
+            }
+            else {
+                addTouch(into, full, "bash", mtimeIso, false);
+            }
+        }
+    }
+}
 /**
  * Result candidates of a session: the pages the person named first, then the
- * pages the session touched, most recently touched first.
+ * pages the session touched, opened in a browser, or compiled in its workspace —
+ * real deliverables ranked ahead of skeleton templates, most recently touched first.
  *
  * `transcripts` is the main transcript followed by each sub-agent's. `notes`
  * collects what the caller must tell the person: a named file that is not
  * there, touched pages that did not fit the list.
  */
-export function findResultCandidates(transcripts, extraPaths = [], notes = []) {
+export function findResultCandidates(transcripts, extraPaths = [], notes = [], opts = {}) {
     const touched = new Map();
+    const ctx = {
+        cwds: new Set((opts.cwds ?? []).filter((c) => typeof c === "string" && path.isAbsolute(c)).map((c) => path.normalize(c))),
+        minTsMs: typeof opts.startedAtMs === "number" && Number.isFinite(opts.startedAtMs) ? opts.startedAtMs : null,
+        maxTsMs: typeof opts.endedAtMs === "number" && Number.isFinite(opts.endedAtMs) ? opts.endedAtMs : null,
+        pendingLocalUrls: [],
+    };
     for (const t of transcripts)
-        collectTouchedPages(t.jsonl, t.subagent, touched);
+        collectTouchedPages(t.jsonl, t.subagent, touched, ctx);
     const isFile = (p) => { try {
         return fs.statSync(p).isFile();
     }
     catch {
         return false;
     } };
+    // Resolve localhost/127.0.0.1 browser URLs against recorded session working directories
+    const walkRoots = topLevelRoots(ctx.cwds);
+    const allCwds = [...new Set([...walkRoots, ...ctx.cwds])];
+    for (const pending of ctx.pendingLocalUrls) {
+        const searchDirs = pending.cwd ? [pending.cwd, ...allCwds.filter((d) => d !== pending.cwd)] : allCwds;
+        for (const base of searchDirs) {
+            const candidate = path.resolve(base, pending.rel);
+            if (!inside(base, candidate))
+                continue;
+            if (isFile(candidate)) {
+                addTouch(touched, candidate, "browser", pending.ts, pending.bySubagent);
+                break;
+            }
+        }
+    }
+    // Signal 3b: Bounded workspace walk for script-built HTML deliverables modified within the session window
+    if (ctx.minTsMs !== null && ctx.maxTsMs !== null && walkRoots.length > 0) {
+        walkWorkspaceDeliverables(walkRoots, ctx.minTsMs, ctx.maxTsMs, touched);
+    }
+    // Normalize map keys by realpath where possible so symlinked/relative aliases collapse to one candidate.
+    // For browser-opened and bash-mentioned paths (not directly written/sent), require them to live inside the session's workspace roots when roots are known.
+    const deduped = new Map();
+    for (const t of touched.values()) {
+        let key = t.path;
+        try {
+            if (fs.statSync(t.path).isFile())
+                key = fs.realpathSync(t.path);
+        }
+        catch {
+            continue;
+        }
+        const direct = t.writes > 0 || t.edits > 0 || t.sent;
+        if (!direct && walkRoots.length > 0 && !walkRoots.some((r) => inside(r, key)))
+            continue;
+        const existing = deduped.get(key);
+        if (!existing) {
+            deduped.set(key, { ...t, path: key });
+        }
+        else {
+            existing.writes += t.writes;
+            existing.edits += t.edits;
+            existing.sent = existing.sent || t.sent;
+            existing.browserOpened = existing.browserOpened || t.browserOpened;
+            existing.bashBuilt = existing.bashBuilt || t.bashBuilt;
+            if (t.last && (existing.last === null || t.last > existing.last))
+                existing.last = t.last;
+            if (!t.bySubagent)
+                existing.bySubagent = false;
+        }
+    }
     // A page the person named is why they re-ran prepare: it is listed whatever
     // else there is, and a path that does not lead to a file is said out loud.
     const named = [];
     const namedPaths = new Set();
     for (const p of extraPaths) {
         const abs = path.resolve(p);
-        if (namedPaths.has(abs))
-            continue;
         if (!isFile(abs)) {
             notes.push(`--result ${p}: there is no such file — it is not listed`);
             continue;
         }
-        namedPaths.add(abs);
-        named.push(touched.get(abs) ?? { path: abs, writes: 0, edits: 0, sent: false, last: null, bySubagent: false });
+        let real = abs;
+        try {
+            real = fs.realpathSync(abs);
+        }
+        catch { /* keep abs */ }
+        if (namedPaths.has(real))
+            continue;
+        namedPaths.add(real);
+        named.push(deduped.get(real) ?? { path: real, writes: 0, edits: 0, sent: false, browserOpened: false, bashBuilt: false, last: null, bySubagent: false });
     }
-    const rest = [...touched.values()].filter((t) => !namedPaths.has(t.path) && isFile(t.path));
-    rest.sort((a, b) => (b.last ?? "").localeCompare(a.last ?? "") || a.path.localeCompare(b.path));
-    const listed = rest.slice(0, RESULT_LIMITS.maxCandidates);
-    if (rest.length > listed.length) {
-        notes.push(`${rest.length - listed.length} more page(s) the session touched are not listed (the ${RESULT_LIMITS.maxCandidates} most recent are) — name one with --result "<path>" to list it`);
+    const restRaw = [...deduped.values()].filter((t) => !namedPaths.has(t.path) && isFile(t.path));
+    const restWithDesc = restRaw.map((touch) => ({ touch, described: describeResult(touch.path) }));
+    restWithDesc.sort((a, b) => Number(a.described.isTemplateHint) - Number(b.described.isTemplateHint) ||
+        (b.touch.last ?? "").localeCompare(a.touch.last ?? "") ||
+        Number(b.touch.sent) - Number(a.touch.sent) ||
+        Number(b.touch.browserOpened) - Number(a.touch.browserOpened) ||
+        a.touch.path.localeCompare(b.touch.path));
+    const listed = restWithDesc.slice(0, RESULT_LIMITS.maxCandidates);
+    if (restWithDesc.length > listed.length) {
+        notes.push(`${restWithDesc.length - listed.length} more page(s) the session touched are not listed (the ${RESULT_LIMITS.maxCandidates} most recent are) — name one with --result "<path>" to list it`);
     }
-    return [...named, ...listed].map((t, i) => ({
+    const all = [
+        ...named.map((touch) => ({ touch, described: describeResult(touch.path), isNamed: true })),
+        ...listed.map((item) => ({ ...item, isNamed: false })),
+    ];
+    return all.map(({ touch: t, described, isNamed }, i) => ({
         id: i + 1,
         entry: path.basename(t.path),
         path: t.path,
@@ -388,7 +742,7 @@ export function findResultCandidates(transcripts, extraPaths = [], notes = []) {
         edits: t.edits,
         sent_to_user: t.sent,
         by_subagent: t.bySubagent,
-        named: namedPaths.has(t.path),
-        ...describeResult(t.path),
+        named: isNamed,
+        ...described,
     }));
 }

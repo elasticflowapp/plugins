@@ -59,6 +59,9 @@ function envelopeFacts(jsonl) {
     let sessionId = null;
     const versions = new Set();
     const entrypoints = new Set();
+    const cwds = new Set();
+    let startedAtMs = null;
+    let endedAtMs = null;
     for (const r of records(jsonl)) {
         if (sessionId === null && typeof r["sessionId"] === "string")
             sessionId = r["sessionId"];
@@ -66,8 +69,19 @@ function envelopeFacts(jsonl) {
             versions.add(r["version"]);
         if (typeof r["entrypoint"] === "string")
             entrypoints.add(r["entrypoint"]);
+        if (typeof r["cwd"] === "string" && path.isAbsolute(r["cwd"]))
+            cwds.add(path.normalize(r["cwd"]));
+        if (typeof r["timestamp"] === "string" && /^\d{4}-\d{2}-\d{2}T/.test(r["timestamp"])) {
+            const ms = Date.parse(r["timestamp"]);
+            if (Number.isFinite(ms)) {
+                if (startedAtMs === null || ms < startedAtMs)
+                    startedAtMs = ms;
+                if (endedAtMs === null || ms > endedAtMs)
+                    endedAtMs = ms;
+            }
+        }
     }
-    return { sessionId, versions: [...versions].sort(), entrypoints: [...entrypoints].sort() };
+    return { sessionId, versions: [...versions].sort(), entrypoints: [...entrypoints].sort(), cwds: [...cwds], startedAtMs, endedAtMs };
 }
 const TRIM_MARK = (more) => `\n… [${more.toLocaleString("en-US")} more characters not published — trimmed by ef-share to fit the upload]`;
 function trimString(s, limit) {
@@ -436,7 +450,11 @@ export async function prepareSession(opts) {
     // up on disk by the paths the session wrote them to — a desktop-app path holds
     // the account's ids.
     const resultNotes = [];
-    const results = findResultCandidates(resultSources, opts.extraResults ?? [], resultNotes);
+    const results = findResultCandidates(resultSources, opts.extraResults ?? [], resultNotes, {
+        cwds: facts.cwds,
+        startedAtMs: facts.startedAtMs,
+        endedAtMs: facts.endedAtMs,
+    });
     warnings.push(...resultNotes);
     writeJson(path.join(dir, "results.json"), results);
     // A shape nobody has looked at is said out loud: /share relays every warning.
@@ -562,6 +580,7 @@ export function summarizeManifest(m) {
             entry: r.entry,
             path: r.path,
             named_by_you: r.named,
+            isTemplateHint: r.isTemplateHint,
             files: [r.entry, ...r.assets.map((a) => a.rel)],
             total_bytes: r.total_bytes,
             fits_this_upload: r.blocked === null && r.total_bytes <= room,

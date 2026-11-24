@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-24
+
+### Added
+- **Multi-signal HTML deliverable discovery.** `prepare` now discovers compiled
+  and script-generated HTML pages produced in Bash or verified in a browser
+  (such as `open`, Playwright, or local script outputs) in addition to pages
+  written directly by `Write` / `Edit`. Built deliverables are ranked ahead of
+  unexpanded skeleton templates (`template.html` or files with build
+  placeholders), and `/share` warns before selecting a template-hinted file.
+- **Active publisher handle announcement.** `/share` reads the `publisher`
+  object returned by `share_begin` and `/api/share/upload` and tells the user
+  which `@handle` (and display name) will own the published session before
+  uploading. `client.json` now sends `client_version` so the server can warn
+  legacy clients (`< 0.12.0`).
+
+### Fixed
+- **`refsInHtml()` ignores `<script type="application/json">` data blocks.**
+  Inline JSON payloads (such as Next.js data islands or chart datasets that
+  mention markdown or local paths inside string values) are no longer parsed
+  as HTML asset references, preventing unrelated workspace files from being
+  pulled into published result bundles.
+
 ## [0.12.2] - 2026-11-23
 
 The texts follow the session addresses the server now writes (ADR-0030), and
@@ -410,7 +432,8 @@ Initial public release of the `ef-share` Claude Code plugin.
 
 <!-- Releases are tagged in elasticflowapp/plugins from v0.8.0 on. 0.5.0–0.7.0 were published
      before that: each links to the commit that published it (its share/ tree). -->
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.13.0
 [0.12.2]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.2
 [0.12.1]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.1
 [0.12.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.0

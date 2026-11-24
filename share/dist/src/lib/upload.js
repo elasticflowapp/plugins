@@ -26,7 +26,25 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { fileURLToPath } from "node:url";
 import { mergeAuthoredAutomations, validateAuthoredChapters } from "./authored.js";
+const PLUGIN_VERSION = (() => {
+    for (const rel of [
+        "../../../.claude-plugin/plugin.json",
+        "../../.claude-plugin/plugin.json",
+        "../../../package.json",
+        "../../package.json",
+    ]) {
+        try {
+            const p = path.resolve(path.dirname(fileURLToPath(import.meta.url)), rel);
+            const pkg = JSON.parse(fs.readFileSync(p, "utf-8"));
+            if (typeof pkg.version === "string" && pkg.version)
+                return pkg.version;
+        }
+        catch { /* try next */ }
+    }
+    return "0.13.0";
+})();
 import { RESULT_LIMITS } from "./results.js";
 import { mimeFor, unpublishableEntry, unpublishablePath } from "./result-types.js";
 import { PLAIN_TRANSCRIPT_MAX, PART_OVERHEAD_BYTES, SERVER_LIMITS, uploadBudget, mb } from "./limits.js";
@@ -389,6 +407,7 @@ export function buildUploadPlan(dir, resultIds, opts = {}) {
     }
     add("client.json", jsonPart({
         client: "ef-share-plugin",
+        client_version: PLUGIN_VERSION,
         prepare_version: manifest.prepare_version,
         claude_code_versions: manifest.transcript.claude_code_versions,
         entrypoints: manifest.transcript.entrypoints,
