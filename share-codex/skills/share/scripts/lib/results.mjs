@@ -136,6 +136,30 @@ export function nameCollides(taken, key) {
   return false
 }
 
+const TEMPLATE_PATH_RE = /(^|\/)(template|skeleton|boilerplate)[^/]*\.html?$/i
+const BUILD_PLACEHOLDER_RE = /\/\*__[A-Z0-9_]+__\*\//
+const MUSTACHE_PLACEHOLDER_RE = /\{\{[^}]{1,80}\}\}/
+
+/** True when a file looks like an unexpanded build template / skeleton rather than a real deliverable. */
+export function detectTemplateHint(filePath, entryText, bytes) {
+  const normalized = String(filePath).replace(/\\/g, "/")
+  if (TEMPLATE_PATH_RE.test(normalized)) return true
+  if (typeof entryText === "string") {
+    if (BUILD_PLACEHOLDER_RE.test(entryText)) return true
+    if (bytes < 2048 && MUSTACHE_PLACEHOLDER_RE.test(entryText)) return true
+  }
+  return false
+}
+
+function isExecutableScriptTag(attrs) {
+  if (/\bsrc\s*=/i.test(attrs)) return false
+  const tm = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(attrs)
+  if (!tm) return true
+  const raw = (tm[1] ?? tm[2] ?? tm[3] ?? "").trim().toLowerCase()
+  const mime = raw.split(";")[0].trim()
+  return mime === "" || mime === "module" || mime === "text/javascript" || mime === "application/javascript"
+}
+
 function refsInHtml(html) {
   const out = []
   const attr = (v) => decodeEntities(v ?? "")
@@ -146,7 +170,9 @@ function refsInHtml(html) {
     for (const cand of attr(m[1] ?? m[2]).split(",")) out.push(cand.trim().split(/\s+/)[0] ?? "")
   }
   for (const m of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) out.push(...refsInCss(m[1]))
-  for (const m of html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)) out.push(...refsInJs(m[1]))
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    if (isExecutableScriptTag(m[1])) out.push(...refsInJs(m[2]))
+  }
   return out
 }
 
@@ -182,7 +208,7 @@ function readBytes(p) {
 
 export const sha256Hex = (data) => crypto.createHash("sha256").update(data).digest("hex")
 
-const nothing = (blocked, bytes = 0) => ({ bytes, sha256: null, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked })
+const nothing = (blocked, bytes = 0) => ({ bytes, sha256: null, isTemplateHint: false, assets: [], skipped: [], remote_hosts: [], total_bytes: bytes, blocked })
 
 /** Said of a page that is a link: what is published is a file, under its own name, from its own folder. */
 const IS_A_LINK = "a symbolic link — a result is the file itself: name the file it leads to"
@@ -226,7 +252,9 @@ export function describeResult(entryPath) {
   const nameKey = (rel) => rel.normalize("NFC").toLowerCase()
   const taken = new Set([nameKey(path.basename(entryPath))])
 
-  const queue = [{ file: entryReal, depth: 0, text: entryData.toString("utf-8") }]
+  const entryText = entryData.toString("utf-8")
+  const isTemplateHint = detectTemplateHint(entryPath, entryText, entryData.length)
+  const queue = [{ file: entryReal, depth: 0, text: entryText }]
   const visited = new Set([entryReal])
 
   while (queue.length > 0) {
@@ -283,6 +311,7 @@ export function describeResult(entryPath) {
   return {
     bytes: entryData.length,
     sha256: sha256Hex(entryData),
+    isTemplateHint,
     assets: [...assets.values()].sort((a, b) => a.rel.localeCompare(b.rel)),
     skipped: [...skipped.entries()].map(([ref, reason]) => ({ ref: ref.slice(0, 200), reason })).slice(0, 40),
     remote_hosts: [...hosts].sort().slice(0, 20),
@@ -474,6 +503,7 @@ export function resultsForDisplay(results, room) {
     entry: r.entry,
     path: r.path,
     named_by_you: r.named,
+    ...(r.isTemplateHint ? { isTemplateHint: true } : {}),
     files: [r.entry, ...r.assets.map((a) => a.rel)],
     total_bytes: r.total_bytes,
     // each file is a part of the request and a line of its manifest, besides its own bytes

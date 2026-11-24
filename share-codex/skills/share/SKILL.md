@@ -38,7 +38,7 @@ The `share_*` tools are the tools of the `share` MCP server this plugin bundles.
      session file or a session id yourself and do not add options to make it
      pass: publishing the wrong session is worse than not publishing.
 
-2. **Begin.** Call `share_begin` with `{}`. It returns `{ stagingId, uploadUrl, ticket }`.
+2. **Begin.** Call `share_begin` with `{}`. It returns `{ stagingId, uploadUrl, ticket, publisher }`. When `publisher` is present, explicitly tell the user before publishing: `Publishing to ElasticFlow Share under account @<handle> (<Display Name>)` (omit the parenthetical when displayName is absent).
    - If the `share` server is not signed in (the tool is missing, or the call is
      refused as unauthorized), tell the user to connect it — `codex mcp login share`
      in a terminal, or **Connect** on the ElasticFlow Share plugin in the app — and
