@@ -2,7 +2,7 @@
   "name": "ef-share",
   "displayName": "ElasticFlow Share",
   "description": "Publish this Antigravity session to ElasticFlow Share: a readable page with the conversation, the commands and tools it used, and a link to pass on.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": { "name": "ElasticFlow", "url": "https://elasticflow.app" },
   "homepage": "https://elasticflow.app/share/connect",
   "repository": "https://github.com/elasticflowapp/plugins",

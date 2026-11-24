@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-24
+
+### Added
+- **Active publisher handle announcement.** The `share` skill now reads
+  `publisher` from `share_begin` and explicitly states which `@handle` (and
+  display name) will own the published session before uploading.
+
+### Fixed
+- **`refsInHtml()` ignores `<script type="application/json">` data blocks.**
+  Inline JSON payloads inside HTML results are no longer scanned as asset
+  references, preventing unrelated local paths embedded in JSON strings from
+  being pulled into published result bundles.
+
 ## [0.2.2] - 2026-11-23
 
 ### Changed
