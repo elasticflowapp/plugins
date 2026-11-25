@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-25
+
+### Added
+- **Session update, replacement, and deletion flows.** `ef-share.mjs upload` and
+  `send-results` now surface `existingSession` from `/api/share/upload`, and the
+  `share` skill passes `{ source: "antigravity", sourceSessionId }` to
+  `share_begin`. Updating an already-published conversation reuses its existing
+  `visibility`, `title`, `summary`, `tags`, and `tos` by default; when
+  `continuation.ok` is `false`, the skill asks for explicit confirmation before
+  passing `replace: true` to `share_publish`.
+- **Fast metadata/visibility updates and permanent deletion.** The `share` skill
+  documents `share_update` (metadata/visibility-only updates without
+  re-uploading the transcript) and `share_delete` (`confirm: true` after
+  explicit user confirmation).
+
 ## [0.2.3] - 2026-11-24
 
 ### Added

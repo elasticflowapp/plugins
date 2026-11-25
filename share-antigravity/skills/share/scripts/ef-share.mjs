@@ -324,6 +324,7 @@ async function upload(f) {
     runtime: answer.runtime,
     suggestedTitle: answer.suggestedTitle ?? null,
     metadata: answer.metadata ?? null,
+    existingSession: answer.existingSession ?? null,
     redaction_groups: groupCandidates(answer.redactionCandidates).map(({ spans, ...g }) => g),
     chapterCandidates: answer.chapterCandidates ?? null,
     // pages the session wrote that could be published with it — only on the person's yes, with `send-results`
@@ -423,6 +424,7 @@ async function sendResults(f) {
     runtime: answer.runtime,
     suggestedTitle: answer.suggestedTitle ?? null,
     metadata: answer.metadata ?? null,
+    existingSession: answer.existingSession ?? null,
     // what went with the snapshot: each result, its files, and the picture of its page on this machine
     sent,
     accepted: accepted ? { results: accepted.results ?? 0, previews: accepted.previews ?? 0 } : null,
