@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-25
+
+### Added
+- **Session update, replacement, and deletion flows.** `/share` now passes
+  `source` and `sourceSessionId` to `share_begin` and reads `existingSession`
+  from `share_begin` and `/api/share/upload` so updating an already-published
+  session reuses its current `visibility`, `title`, `summary`, `tags`, and `tos`
+  by default. When a local transcript diverged or was rewound, `/share` asks for
+  explicit confirmation before passing `replace: true` to `share_publish` to
+  update the existing link in place.
+- **Fast metadata/visibility updates and permanent deletion.** `/share` now
+  documents `share_update` (for changing `visibility`, `title`, `summary`,
+  `tags`, `tos`, or `capability_scope` without re-uploading the transcript) and
+  `share_delete` (requiring explicit user confirmation before permanently
+  removing a published session and its link).
+
 ## [0.13.0] - 2026-11-24
 
 ### Added
@@ -432,7 +448,8 @@ Initial public release of the `ef-share` Claude Code plugin.
 
 <!-- Releases are tagged in elasticflowapp/plugins from v0.8.0 on. 0.5.0–0.7.0 were published
      before that: each links to the commit that published it (its share/ tree). -->
-[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/elasticflowapp/plugins/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.14.0
 [0.13.0]: https://github.com/elasticflowapp/plugins/releases/tag/v0.13.0
 [0.12.2]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.2
 [0.12.1]: https://github.com/elasticflowapp/plugins/releases/tag/v0.12.1

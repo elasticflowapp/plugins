@@ -43,7 +43,7 @@ const PLUGIN_VERSION = (() => {
         }
         catch { /* try next */ }
     }
-    return "0.13.0";
+    return "0.14.0";
 })();
 import { RESULT_LIMITS } from "./results.js";
 import { mimeFor, unpublishableEntry, unpublishablePath } from "./result-types.js";
